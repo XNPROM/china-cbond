@@ -11,13 +11,11 @@
 ```
 iFinD API ──→ raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
                     ↓
-               DuckDB (data/cbond.duckdb) ← 7 张表
+               DuckDB (data/cbond.duckdb) ← 6 张表 + 索引
                     ↓
          assemble_dataset.py (SQL JOIN) → dataset.json
                     ↓
-         bs_pricing.py → DB upsert (BS定价, 相对价值, 希腊字母)
-                    ↓
-         assemble_dataset.py (第2次) → dataset.json (含 BS 字段)
+         bs_pricing.py → DB upsert + dataset.json 回写 (BS定价, 相对价值, 希腊字母)
                     ↓
          strategy_score.py → DB upsert (双低, 双低-偏股/平衡/偏债, 低估)
                     ↓
@@ -25,7 +23,7 @@ iFinD API ──→ raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
                     ↓
          build_overview_md.py → cbond_overview.md
                     ↓
-         render_html.py → cbond_overview.html
+         render_html.py → cbond_overview.html (含回测净值曲线)
 ```
 
 ## 每日刷新流程

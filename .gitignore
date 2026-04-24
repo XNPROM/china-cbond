@@ -13,6 +13,7 @@ __pycache__/
 
 # macOS archive junk
 __MACOSX/
+extracted/
 
 # OS
 .DS_Store
