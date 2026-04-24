@@ -1,0 +1,31 @@
+# Data
+data/
+*.duckdb
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# iFinD auth
+.codex_logs/
+
+# macOS archive junk
+__MACOSX/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
+
+# Temp
+_temp_research/
+.env
+*.token
