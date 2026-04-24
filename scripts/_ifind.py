@@ -62,7 +62,7 @@ def batched(items, n):
 
 
 def ths_dr(table, condition, fields, fmt="dataframe"):
-    """THS_DR — iFinD data extraction (e.g. p05479 for CB universe).
+    """THS_DR — iFinD data pool (e.g. p05479 for CB universe).
 
     Args:
         table: data table ID (e.g. 'p05479' for convertible bonds)
@@ -70,9 +70,9 @@ def ths_dr(table, condition, fields, fmt="dataframe"):
         fields: comma-separated field list with :Y (e.g. 'jydm:Y,jydm_mc:Y')
         fmt: output format (default 'dataframe')
     """
-    return _post("data_extraction", {
-        "table": table,
-        "condition": condition,
-        "fields": fields,
+    return _post("data_pool", {
+        "reportname": table,
+        "functionpara": dict(pair.split("=") for pair in condition.split(";") if "=" in pair),
+        "outputpara": fields.replace(":Y", ""),
         "format": fmt,
     })
