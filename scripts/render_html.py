@@ -398,6 +398,7 @@ def parse_card(lines, start_idx):
     metrics = dict(zip(header_cells, value_cells))
     main_business = ""
     themes = []
+    sparkline_data = {}
     while i < len(lines):
         cur = lines[i].strip()
         if cur.startswith("### ") or cur.startswith("## "):
@@ -406,6 +407,17 @@ def parse_card(lines, start_idx):
             main_business = cur.replace("**主营**：", "", 1).strip()
         if cur.startswith("**题材**："):
             themes = re.findall(r"`#([^`]+)`", cur)
+        if cur.startswith("**时序**："):
+            payload = cur.replace("**时序**：", "", 1).strip()
+            try:
+                parts = dict(p.split("=", 1) for p in payload.split() if "=" in p)
+                sparkline_data = {
+                    "dates": parts.get("dates", "").split(","),
+                    "delta": [float(v) for v in parts.get("delta", "").split(",") if v],
+                    "rv": [float(v) for v in parts.get("rv", "").split(",") if v],
+                }
+            except (ValueError, KeyError):
+                pass
         i += 1
 
     return {
@@ -427,6 +439,7 @@ def parse_card(lines, start_idx):
         "strategy": metrics.get("策略分", ""),
         "business": main_business,
         "themes": themes,
+        "sparkline": sparkline_data,
     }, i
 
 
@@ -488,6 +501,26 @@ def signed_class(text):
     if num < 0:
         return "down"
     return "flat"
+
+
+def render_sparkline(values, width=60, height=20, color="#2563eb"):
+    if not values or len(values) < 2:
+        return ""
+    mn, mx = min(values), max(values)
+    rng = mx - mn
+    if rng < 1e-9:
+        rng = 1.0
+    pts = []
+    for i, v in enumerate(values):
+        x = (i / (len(values) - 1)) * (width - 2) + 1
+        y = height - 1 - ((v - mn) / rng) * (height - 4) - 2
+        pts.append(f"{x:.1f},{y:.1f}")
+    return (
+        f'<svg width="{width}" height="{height}" style="vertical-align:middle">'
+        f'<polyline points="{" ".join(pts)}" fill="none" stroke="{color}" stroke-width="1.2"/>'
+        f'<circle cx="{pts[-1].split(",")[0]}" cy="{pts[-1].split(",")[1]}" r="2" fill="{color}"/>'
+        f'</svg>'
+    )
 
 
 def render_strategy(strategy_picks):
@@ -585,6 +618,10 @@ def render_group(section, idx):
             delta_text = f"{delta_val:.2f}"
         except (ValueError, TypeError):
             delta_text = delta_raw or ""
+        # Sparklines from historical data
+        sp = card.get("sparkline", {})
+        delta_spark = render_sparkline(sp.get("delta", []), color="#2563eb")
+        rv_spark = render_sparkline(sp.get("rv", []), color="#16a34a")
         rows_html += (
             f'<tr class="bond-row" data-search="{search_blob(card, theme)}" '
             f'data-price="{num_value(card["price"])}" data-daychg="{num_value(card["day_chg"])}" '
@@ -603,8 +640,8 @@ def render_group(section, idx):
             f'<td class="num">{html.escape(card["pure"])}</td>'
             f'<td class="num">{html.escape(card["vol"])}</td>'
             f'<td class="num">{html.escape(card.get("pure_bond_ytm", ""))}</td>'
-            f'<td class="num {rv_class}">{html.escape(rv_text)}</td>'
-            f'<td class="num">{html.escape(delta_text)}</td>'
+            f'<td class="num {rv_class}">{html.escape(rv_text)}{rv_spark}</td>'
+            f'<td class="num">{html.escape(delta_text)}{delta_spark}</td>'
             f'<td class="num">{html.escape(card["balance"])}</td>'
             f'<td>{html.escape(card["rating"])}</td>'
             f'<td>{html.escape(card["maturity"])}</td>'

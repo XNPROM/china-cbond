@@ -87,7 +87,21 @@ def _attach_prices(recs):
         r["latest"] = px.get(r["code"])
 
 
-def _probe_ranges(seen_codes, asof_ymd):
+def _full_scan_ranges():
+    """Generate all possible CB code ranges for systematic enumeration.
+
+    CB code patterns: 110xxx.SH, 111xxx.SH, 113xxx.SH, 118xxx.SH,
+                      123xxx.SZ, 127xxx.SZ, 128xxx.SZ
+    """
+    codes = []
+    for prefix, market in [("110", "SH"), ("111", "SH"), ("113", "SH"), ("118", "SH"),
+                            ("123", "SZ"), ("127", "SZ"), ("128", "SZ")]:
+        for n in range(1, 1000):
+            codes.append(f"{prefix}{n:03d}.{market}")
+    return codes
+
+
+
     """Probe beyond seen ranges for any newly issued CBs."""
     # Build probe codes: next 30 past each seed max per prefix, plus fixed canonical ranges.
     from collections import defaultdict
@@ -117,6 +131,7 @@ def main():
     ap.add_argument("--out-csv", required=True)
     ap.add_argument("--out-codes", default=None, help="optional plain codes.txt")
     ap.add_argument("--probe", action="store_true", help="probe beyond seed ranges")
+    ap.add_argument("--full-scan", action="store_true", help="scan all possible CB code ranges (slow but exhaustive)")
     args = ap.parse_args()
 
     asof_ymd = _yyyymmdd(args.asof)
@@ -137,8 +152,21 @@ def main():
     alive = [r for r in recs if _is_alive(r, asof_ymd)]
     print(f"[alive-seed] {len(alive)}")
 
-    # 4) probe new
-    if args.probe:
+    # 4) probe new or full scan
+    if args.full_scan:
+        scan_codes = _full_scan_ranges()
+        # Exclude codes already queried
+        seen = {r["code"] for r in recs}
+        scan_codes = [c for c in scan_codes if c not in seen]
+        print(f"[full-scan] {len(scan_codes)} codes to scan")
+        scan_recs = _query_bond_meta(scan_codes, asof_ymd)
+        scan_alive = [r for r in scan_recs if _is_alive(r, asof_ymd)]
+        print(f"[alive-full-scan] {len(scan_alive)} new bonds found")
+        seen_alive = {r["code"] for r in alive}
+        for r in scan_alive:
+            if r["code"] not in seen_alive:
+                alive.append(r)
+    elif args.probe:
         seen = {r["code"] for r in recs}
         probes = _probe_ranges(seen, asof_ymd)
         print(f"[probe] {len(probes)} extra codes")

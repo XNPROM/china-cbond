@@ -116,6 +116,26 @@ def _load_strategy_from_db(trade_date):
     ]
 
 
+def _load_history_from_db(trade_date):
+    """Load historical delta and relative_value for sparkline charts."""
+    con = connect()
+    rows_raw = con.execute(
+        "SELECT code, trade_date, bs_delta, relative_value "
+        "FROM valuation_daily "
+        "WHERE bs_delta IS NOT NULL AND trade_date <= ? "
+        "ORDER BY code, trade_date",
+        [trade_date]
+    ).fetchall()
+    con.close()
+    hist = {}
+    for code, td, delta, rv in rows_raw:
+        hist.setdefault(code, {"dates": [], "delta": [], "rv": []})
+        hist[code]["dates"].append(td)
+        hist[code]["delta"].append(round(delta, 3))
+        hist[code]["rv"].append(round(rv, 3))
+    return hist
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True)
@@ -127,6 +147,7 @@ def main():
     dataset = json.load(open(args.dataset, encoding="utf-8"))
     themes = _load_themes_from_db(args.trade_date)
     strategy_map, strategy_list = _load_strategy_from_db(args.trade_date)
+    hist_data = _load_history_from_db(args.trade_date)
 
     rows = []
     for item in dataset["items"]:
@@ -247,6 +268,10 @@ def main():
             )
             lines.append("")
             lines.append(f"**主营**：{row.get('business_rewrite','').strip()}")
+            # Historical sparkline data
+            h = hist_data.get(row["code"])
+            if h and len(h["dates"]) > 1:
+                lines.append(f"**时序**：dates={','.join(h['dates'])} delta={','.join(str(d) for d in h['delta'])} rv={','.join(str(v) for v in h['rv'])}")
             lines.append("")
             lines.append("**题材**：" + " ".join(f"`#{theme_name}`" for theme_name in row.get("themes", [])))
     lines.append("")
