@@ -59,3 +59,20 @@ def history(codes, indicators, startdate, enddate, functionpara=None):
 def batched(items, n):
     for i in range(0, len(items), n):
         yield items[i:i + n]
+
+
+def ths_dr(table, condition, fields, fmt="dataframe"):
+    """THS_DR — iFinD data extraction (e.g. p05479 for CB universe).
+
+    Args:
+        table: data table ID (e.g. 'p05479' for convertible bonds)
+        condition: semicolon-separated filter string (e.g. 'jyzt=2;edate=20260424')
+        fields: comma-separated field list with :Y (e.g. 'jydm:Y,jydm_mc:Y')
+        fmt: output format (default 'dataframe')
+    """
+    return _post("data_extraction", {
+        "table": table,
+        "condition": condition,
+        "fields": fields,
+        "format": fmt,
+    })
