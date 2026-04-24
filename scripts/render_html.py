@@ -67,7 +67,9 @@ header h1{font-size:22px;font-weight:700;margin:0 0 4px}
 /* ---- Strategy ---- */
 .strategy-section{margin:0 0 32px}
 .strategy-section h2{font-size:16px;font-weight:600;padding:12px 0 8px;border-bottom:2px solid var(--text)}
-.strategy-section .desc{font-size:12px;color:var(--muted);margin:4px 0 12px}
+.strat-card{margin:0 0 20px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:#fafafa}
+.strat-card h3{font-size:14px;font-weight:600;margin:0 0 4px}
+.strat-card .desc{font-size:12px;color:var(--muted);margin:0 0 10px}
 .stable{width:100%;border-collapse:collapse;font-size:13px}
 .stable th{text-align:left;padding:6px 8px;border-bottom:2px solid var(--border);color:var(--muted);font-weight:500;font-size:12px;white-space:nowrap}
 .stable td{padding:5px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
@@ -80,26 +82,18 @@ header h1{font-size:22px;font-weight:700;margin:0 0 4px}
 .group-head h3{font-size:15px;font-weight:600}
 .group-head .cnt{font-size:12px;color:var(--muted)}
 .group-head .toggle{font-size:11px;color:var(--accent);margin-left:auto}
-.group-body{overflow:hidden}
+.group-body{overflow-x:auto}
 .group-body.collapsed{display:none}
 
 /* ---- Bond table ---- */
-.btable{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
-.btable col.c-name{width:110px}
-.btable col.c-code{width:90px}
-.btable col.c-price{width:110px}
-.btable col.c-num{width:72px}
-.btable col.c-rating{width:42px}
-.btable col.c-strat{width:54px}
-.btable col.c-biz{width:auto}
-.btable col.c-themes{width:120px}
+.btable{width:100%;border-collapse:collapse;font-size:13px}
 .btable th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:500;font-size:11px;white-space:nowrap;position:sticky;top:0;background:var(--bg);z-index:1}
-.btable th.num,.btable td.num{text-align:right}
-.btable td{padding:6px 8px;border-bottom:1px solid #f0f0f0;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btable th.num,.btable td.num{text-align:right;white-space:nowrap}
+.btable td{padding:6px 8px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
 .btable tr:hover{background:#fafafa}
-.btable .bname{font-weight:600}
-.btable .bname small{display:block;font-weight:400;color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.btable .bprice{font-weight:700;font-size:14px;white-space:normal;line-height:1.3}
+.btable .bname{font-weight:600;white-space:nowrap}
+.btable .bname small{display:block;font-weight:400;color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
+.btable .bprice{font-weight:700;font-size:14px;white-space:nowrap}
 .btable .up{color:var(--red)}
 .btable .down{color:var(--green)}
 .btable .flat{color:var(--muted)}
@@ -110,9 +104,9 @@ header h1{font-size:22px;font-weight:700;margin:0 0 4px}
 .btable .sector-equity{background:#e8f5e9;color:#2e7d32}
 .btable .sector-balanced{background:#fff3e0;color:#e65100}
 .btable .sector-debt{background:#e3f2fd;color:#1565c0}
-.btable .bcode{color:var(--muted);font-size:11px;font-family:monospace}
-.btable .bbiz{white-space:normal;line-height:1.3;color:var(--muted);font-size:12px}
-.btable .bthemes{white-space:normal;line-height:1.3}
+.btable .bcode{color:var(--muted);font-size:11px;font-family:monospace;white-space:nowrap}
+.btable .bbiz{color:var(--muted);font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;line-height:1.3}
+.btable .bthemes{white-space:normal;line-height:1.3;max-width:140px}
 .btable .bthemes span{display:inline-block;padding:1px 5px;margin:1px 2px;border:1px solid var(--border);border-radius:3px;font-size:10px;color:var(--muted)}
 
 /* ---- Empty state ---- */
@@ -159,8 +153,10 @@ function matchQuick(row) {
   if (state.quick === "highPrice") return p > 130;
   if (state.quick === "lowPrice") return p < 100;
   if (state.quick === "lowPremium") return c < 20;
-  if (state.quick === "highVol") return v > 60;
-  if (state.quick === "lowVol") return v < 30;
+  if (state.quick === "midPremium") return c >= 20 && c < 50;
+  if (state.quick === "highPremium") return c >= 50;
+  if (state.quick === "highVol") return v > 1.0;
+  if (state.quick === "lowVol") return v < 0.5;
   return true;
 }
 function matchQuery(row) { return !state.query || (row.dataset.search||"").includes(state.query); }
@@ -286,12 +282,22 @@ def parse_markdown(text):
             continue
         if line == "## 策略推荐":
             i += 1
+            current_strat = ""
+            current_desc = ""
             while i < len(lines) and not lines[i].startswith("## "):
                 cur = lines[i].strip()
-                if cur.startswith("|") and not cur.startswith("|---"):
+                if cur.startswith("### "):
+                    current_strat = cur[4:].strip()
+                elif cur.startswith("*") and cur.endswith("*"):
+                    current_desc = cur.strip("*").strip()
+                elif cur.startswith("|") and not cur.startswith("|---"):
                     cells = [c.strip() for c in cur.split("|")[1:-1]]
                     if cells and cells[0] != "排名":
-                        report["strategy_picks"].append(cells)
+                        report["strategy_picks"].append({
+                            "strategy": current_strat,
+                            "desc": current_desc,
+                            "cells": cells
+                        })
                 i += 1
             continue
         if line.startswith("## 附录"):
@@ -481,27 +487,51 @@ def signed_class(text):
 def render_strategy(strategy_picks):
     if not strategy_picks:
         return ""
-    rows_html = ""
-    for row in strategy_picks:
-        rank, bond, stock, price, conv_prem, pe, vol, score = (row + [""] * 8)[:8]
-        rows_html += (
-            f'<tr>'
-            f'<td class="srank">#{html.escape(rank)}</td>'
-            f'<td class="sname">{html.escape(bond)}</td>'
-            f'<td>{html.escape(stock)}</td>'
-            f'<td>{html.escape(price)}</td>'
-            f'<td>{html.escape(conv_prem)}</td>'
-            f'<td>{html.escape(pe)}</td>'
-            f'<td>{html.escape(vol)}</td>'
-            f'<td>{html.escape(score)}</td>'
-            f'</tr>'
+    # Group by strategy
+    by_strat = {}
+    for item in strategy_picks:
+        s = item.get("strategy", "")
+        by_strat.setdefault(s, {"desc": item.get("desc", ""), "rows": []})
+        by_strat[s]["rows"].append(item["cells"])
+
+    STRAT_META = {
+        "双低": {"icon": "📊", "color": "#2563eb"},
+        "双低-偏股": {"icon": "📈", "color": "#2e7d32"},
+        "双低-平衡": {"icon": "⚖️", "color": "#e65100"},
+        "双低-偏债": {"icon": "🛡️", "color": "#1565c0"},
+        "低估": {"icon": "💎", "color": "#7c3aed"},
+    }
+
+    sections_html = ""
+    for strat_name, data in by_strat.items():
+        meta = STRAT_META.get(strat_name, {"icon": "📋", "color": "#666"})
+        rows_html = ""
+        for row in data["rows"]:
+            rank, bond, stock, price, conv_prem, pe, vol, score = (row + [""] * 8)[:8]
+            rows_html += (
+                f'<tr>'
+                f'<td class="srank">#{html.escape(rank)}</td>'
+                f'<td class="sname">{html.escape(bond)}</td>'
+                f'<td>{html.escape(stock)}</td>'
+                f'<td>{html.escape(price)}</td>'
+                f'<td>{html.escape(conv_prem)}</td>'
+                f'<td>{html.escape(pe)}</td>'
+                f'<td>{html.escape(vol)}</td>'
+                f'<td>{html.escape(score)}</td>'
+                f'</tr>'
+            )
+        sections_html += (
+            f'<div class="strat-card">'
+            f'<h3><span style="font-size:18px">{meta["icon"]}</span> {html.escape(strat_name)}</h3>'
+            f'<p class="desc">{html.escape(data["desc"])}</p>'
+            f'<table class="stable"><tr><th>#</th><th>转债</th><th>正股</th><th>价格</th><th>转股溢价率</th><th>PE</th><th>20日σ</th><th>得分</th></tr>'
+            f'{rows_html}</table></div>'
         )
+
     return (
         '<section class="strategy-section" id="策略推荐">'
-        '<h2>策略推荐 · 双低</h2>'
-        '<p class="desc">过滤 PE&gt;0、波动率&gt;Q1、日涨跌&gt;Q1；排名 = 1.5x转股溢价率排名 + 价格排名；分数越低越优</p>'
-        '<table class="stable"><tr><th>#</th><th>转债</th><th>正股</th><th>价格</th><th>转股溢价率</th><th>PE</th><th>20日σ</th><th>得分</th></tr>'
-        f'{rows_html}</table></section>'
+        f'<h2>策略推荐</h2>'
+        f'{sections_html}</section>'
     )
 
 
@@ -582,12 +612,7 @@ def render_group(section, idx):
         f'<div class="group" id="{sid}">'
         f'<div class="group-head"><h3>{html.escape(theme)}</h3><span class="cnt">({len(cards)})</span><span class="toggle">收起</span></div>'
         f'<div class="group-body">'
-        f'<table class="btable"><colgroup>'
-        '<col class="c-name"><col class="c-code"><col class="c-price">'
-        '<col class="c-num"><col class="c-num"><col class="c-num"><col class="c-num"><col class="c-num"><col class="c-num"><col class="c-num">'
-        '<col class="c-rating"><col class="c-num"><col class="c-strat">'
-        '<col class="c-biz"><col class="c-themes">'
-        '</colgroup><thead><tr>'
+        f'<table class="btable"><thead><tr>'
         '<th>转债</th><th>代码</th><th>价格/涨跌</th><th class="num">转股溢价率</th><th class="num">纯债溢价率</th><th class="num">20日σ</th><th class="num">纯债YTM</th><th class="num">相对价值</th><th class="num">Delta</th><th class="num">余额(亿)</th><th>评级</th><th>到期</th><th>策略</th><th>主营</th><th>题材</th>'
         '</tr></thead><tbody>'
         f'{rows_html}</tbody></table></div></div>'
@@ -632,8 +657,9 @@ def build_html(report, title, trade_date=""):
     <button class="ftag is-active" type="button" data-quick="all">全部</button>
     <button class="ftag" type="button" data-quick="highPrice">价格&gt;130</button>
     <button class="ftag" type="button" data-quick="lowPrice">价格&lt;100</button>
-    <button class="ftag" type="button" data-quick="lowPremium">溢价率&lt;20%</button>
-    <button class="ftag" type="button" data-quick="highVol">波动率&gt;60%</button>
+    <button class="ftag" type="button" data-quick="lowPremium">偏股(&lt;20%)</button>
+    <button class="ftag" type="button" data-quick="midPremium">平衡(20-50%)</button>
+    <button class="ftag" type="button" data-quick="highPremium">偏债(&ge;50%)</button>
     <div class="actions">
       <button class="abtn" id="copyCodes" type="button">复制代码</button>
       <button class="abtn" id="exportCsv" type="button">导出CSV</button>
