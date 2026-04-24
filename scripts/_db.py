@@ -4,10 +4,17 @@ import duckdb
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "cbond.duckdb")
 
+_schema_initialized = False
+
 
 def connect():
+    global _schema_initialized
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    return duckdb.connect(DB_PATH)
+    con = duckdb.connect(DB_PATH)
+    if not _schema_initialized:
+        init_schema(con)
+        _schema_initialized = True
+    return con
 
 
 def init_schema(con):

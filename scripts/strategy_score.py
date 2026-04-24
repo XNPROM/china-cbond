@@ -137,7 +137,7 @@ def main():
     rv_map = {r[0]: r[1] for r in rv_rows}
 
     rv_picks = []
-    rv_candidates = [r for r in candidates if rv_map.get(r["code"]) is not None and rv_map[r["code"]] > 0]
+    rv_candidates = [r for r in candidates if rv_map.get(r["code"]) is not None and 0.5 <= rv_map[r["code"]] <= 2.0]
     if rv_candidates:
         rv_sorted = sorted(rv_candidates, key=lambda r: rv_map[r["code"]])
         for i, r in enumerate(rv_sorted[:args.sector_top]):

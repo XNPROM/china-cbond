@@ -226,8 +226,8 @@ document.querySelector("#exportCsv").addEventListener("click", () => {
   const vis = bondRows.filter(r => !r.hidden);
   if (!vis.length) return;
   const esc = v => { const s = String(v||""); return s.includes(",")||s.includes('"')||s.includes("\n") ? '"'+s.replace(/"/g,'""')+'"' : s; };
-  const h = "bond_code,bond_name,stock_code,stock_name,price,day_chg,conv_prem,pure_prem,vol,balance,rating,maturity";
-  const rows = vis.map(r => [r.dataset.bondCode,r.dataset.bondName,r.dataset.stockCode,r.dataset.stockName,r.dataset.price,r.dataset.daychg,r.dataset.conv,r.dataset.pure,r.dataset.vol,r.dataset.balance,r.dataset.rating,r.dataset.maturity].map(esc).join(","));
+  const h = "bond_code,bond_name,stock_code,stock_name,price,day_chg,conv_prem,pure_prem,vol,pure_bond_ytm,relative_value,delta,balance,rating,maturity,strategy";
+  const rows = vis.map(r => [r.dataset.bondCode,r.dataset.bondName,r.dataset.stockCode,r.dataset.stockName,r.dataset.price,r.dataset.daychg,r.dataset.conv,r.dataset.pure,r.dataset.vol,r.dataset.pureBondYtm||"",r.dataset.relativeValue||"",r.dataset.delta||"",r.dataset.balance,r.dataset.rating,r.dataset.maturity,r.dataset.strategy||""].map(esc).join(","));
   const blob = new Blob(["﻿"+h+"\n"+rows.join("\n")], {type:"text/csv;charset=utf-8;"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "cbond_"+Date.now()+".csv";
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
@@ -245,14 +245,14 @@ def load_backtest(path):
 
 
 def dedup_equity(curve):
-    """Remove duplicate dates (rebalance points appear twice)."""
-    seen = set()
-    out = []
-    for pt in curve:
-        if pt["date"] not in seen:
-            out.append(pt)
-            seen.add(pt["date"])
-    return out
+    """Remove duplicate dates (rebalance points appear twice).
+    Keep the LAST occurrence — it has the updated cumulative value.
+    """
+    seen = {}
+    for i, pt in enumerate(curve):
+        seen[pt["date"]] = i
+    last_indices = sorted(seen.values())
+    return [curve[i] for i in last_indices]
 
 
 def render_equity_curve(backtest):
@@ -570,6 +570,8 @@ def parse_card(lines, start_idx):
         "balance": metrics.get("余额(亿)", ""),
         "rating": metrics.get("评级", ""),
         "maturity": metrics.get("到期", ""),
+        "call_status": metrics.get("强赎", ""),
+        "down_status": metrics.get("下修", ""),
         "strategy": metrics.get("策略分", ""),
         "business": main_business,
         "themes": themes,
@@ -756,6 +758,20 @@ def render_group(section, idx):
         sp = card.get("sparkline", {})
         delta_spark = render_sparkline(sp.get("delta", []), color="#2563eb")
         rv_spark = render_sparkline(sp.get("rv", []), color="#16a34a")
+        # Call/Down status badges
+        call_raw = card.get("call_status", "")
+        call_html = ""
+        if call_raw:
+            if "强赎停牌" in call_raw:
+                call_html = f'<span class="sector-badge sector-debt">{html.escape(call_raw)}</span>'
+            elif "不强赎" in call_raw:
+                call_html = f'<span class="sector-badge sector-equity">{html.escape(call_raw)}</span>'
+            elif "触发" in call_raw:
+                call_html = f'<span class="sector-badge sector-balanced">{html.escape(call_raw)}</span>'
+            else:
+                call_html = html.escape(call_raw)
+        down_raw = card.get("down_status", "")
+        down_html = f'<span class="sector-badge sector-equity">{html.escape(down_raw)}</span>' if down_raw else ""
         rows_html += (
             f'<tr class="bond-row" data-search="{search_blob(card, theme)}" '
             f'data-price="{num_value(card["price"])}" data-daychg="{num_value(card["day_chg"])}" '
@@ -766,7 +782,11 @@ def render_group(section, idx):
             f'data-stock-code="{html.escape(stock_code, quote=True)}" '
             f'data-stock-name="{html.escape(stock_name, quote=True)}" '
             f'data-rating="{html.escape(card["rating"], quote=True)}" '
-            f'data-maturity="{html.escape(card["maturity"], quote=True)}">'
+            f'data-maturity="{html.escape(card["maturity"], quote=True)}" '
+            f'data-pure-bond-ytm="{html.escape(card.get("pure_bond_ytm", ""), quote=True)}" '
+            f'data-relative-value="{html.escape(rv_text, quote=True)}" '
+            f'data-delta="{html.escape(delta_text, quote=True)}" '
+            f'data-strategy="{html.escape(card.get("strategy", ""), quote=True)}">'
             f'<td class="bname">{html.escape(card["bond_name"])}{sector_badge}<small>{html.escape(stock_name)} · {html.escape(card["industry"])}</small></td>'
             f'<td class="bcode">{html.escape(card["bond_code"])}</td>'
             f'<td class="bprice">{html.escape(card["price"])}<br><span class="{sc}" style="font-size:11px;font-weight:400">{html.escape(chg_text)}</span></td>'
@@ -779,6 +799,8 @@ def render_group(section, idx):
             f'<td class="num">{html.escape(card["balance"])}</td>'
             f'<td>{html.escape(card["rating"])}</td>'
             f'<td>{html.escape(card["maturity"])}</td>'
+            f'<td>{call_html}</td>'
+            f'<td>{down_html}</td>'
             f'<td>{strat_html}</td>'
             f'<td class="bbiz">{html.escape(card.get("business", ""))}</td>'
             f'<td class="bthemes">{themes_html}</td>'
@@ -789,7 +811,7 @@ def render_group(section, idx):
         f'<div class="group-head"><h3>{html.escape(theme)}</h3><span class="cnt">({len(cards)})</span><span class="toggle">收起</span></div>'
         f'<div class="group-body">'
         f'<table class="btable"><thead><tr>'
-        '<th>转债</th><th>代码</th><th>价格/涨跌</th><th class="num">转股溢价率</th><th class="num">纯债溢价率</th><th class="num">20日σ</th><th class="num">纯债YTM</th><th class="num">相对价值</th><th class="num">Delta</th><th class="num">余额(亿)</th><th>评级</th><th>到期</th><th>策略</th><th>主营</th><th>题材</th>'
+        '<th>转债</th><th>代码</th><th>价格/涨跌</th><th class="num">转股溢价率</th><th class="num">纯债溢价率</th><th class="num">20日σ</th><th class="num">纯债YTM</th><th class="num">相对价值</th><th class="num">Delta</th><th class="num">余额(亿)</th><th>评级</th><th>到期</th><th>强赎</th><th>下修</th><th>策略</th><th>主营</th><th>题材</th>'
         '</tr></thead><tbody>'
         f'{rows_html}</tbody></table></div></div>'
     )

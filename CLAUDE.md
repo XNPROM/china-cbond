@@ -31,41 +31,37 @@ python3 scripts/assemble_dataset.py \
     --out data/raw/asof=$ASOF/dataset.json
 
 # 4. BS pricing + Greek letters (instant; pure math, no API calls)
-#    Writes bs_value/relative_value/greeks to valuation_daily in DB.
+#    Writes bs_value/relative_value/greeks to DB AND back into dataset.json.
 python3 scripts/bs_pricing.py \
     --dataset    data/raw/asof=$ASOF/dataset.json \
     --trade-date $ASOF
 
-# 5. Re-assemble dataset to include BS pricing results from DB
-python3 scripts/assemble_dataset.py \
-    --trade-date $ASOF \
-    --out data/raw/asof=$ASOF/dataset.json
-
-# 6. Strategy scoring — double-low + sector-neutral + 低估 (instant)
+# 5. Strategy scoring — double-low + sector-neutral + 低估 (instant)
 python3 scripts/strategy_score.py \
     --dataset   data/raw/asof=$ASOF/dataset.json \
     --trade-date $ASOF \
     --out       data/raw/asof=$ASOF/strategy_picks.jsonl
 
-# 7. Theme classification — local rules (instant)
+# 6. Theme classification — local rules (instant)
 python3 scripts/generate_themes_direct.py \
     --dataset data/raw/asof=$ASOF/dataset.json \
     --out     data/raw/asof=$ASOF/themes.jsonl \
     --trade-date $ASOF
 
-# 8. Build Markdown (instant; reads themes + strategy from DB)
+# 7. Build Markdown (instant; reads themes + strategy from DB)
 python3 scripts/build_overview_md.py \
     --dataset    data/raw/asof=$ASOF/dataset.json \
     --trade-date $ASOF \
     --out        reports/$ASOF/cbond_overview.md \
     --title-date $ASOF
 
-# 9. Render HTML (instant; local only, no LLM)
+# 8. Render HTML (instant; local only, no LLM)
 python3 scripts/render_html.py \
     --in         reports/$ASOF/cbond_overview.md \
     --out        reports/$ASOF/cbond_overview.html \
     --title      "可转债概览 · $ASOF" \
-    --trade-date $ASOF
+    --trade-date $ASOF \
+    --backtest   data/raw/asof=$ASOF/backtest_weekly.json
 ```
 
 ## First-time Setup / Rebuild DB
@@ -163,9 +159,9 @@ Two paths exist:
 
 ## Known Pitfalls
 
-- iFinD `ths_concept_*` fields all return ERR — no structured concept/sector data available. Theme classification uses profile text instead.
-- No single API to list all tradable CBs — relies on seed codes + range probing (`discover_universe.py --probe`). Newly issued bonds may be missed.
+- iFinD `ths_concept_*` fields all return ERR — no structured concept/sector data available. Theme classification uses profile text + Shenwan industry from data_pool.
 - Bonds with `ths_bond_balance_cbond = 0` on as-of date are delisted (forced redemption).
 - New listings with <20 trading days will have insufficient volatility samples; `compute_volatility.py` outputs `n_samples` column.
 - Anaconda Python has SSL handshake failures with iFinD; use system `/usr/bin/python3`.
-- **assemble_dataset.py must run twice**: once before bs_pricing (to create dataset.json with raw data), once after (to include BS pricing results written to DB). Skipping the 2nd run means dataset.json will have stale/missing BS values.
+- **BS pricing writes directly into dataset.json** — no need to re-run `assemble_dataset.py` after `bs_pricing.py`.
+- **Backtest uses multiplicative compounding** with configurable slippage (default 10bps one-way) and commission (2bps round-trip).

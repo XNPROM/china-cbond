@@ -99,11 +99,9 @@ def main():
         # Volatility
         sigma = vol_20d
 
-        # Discount rate
-        if ytm is not None and -100 < ytm < 100:
-            r = ytm / 100
-        else:
-            r = args.default_r
+        # Discount rate: use risk-free rate (CGB 5Y or default 2.5%).
+        # Do NOT use YTM — it includes credit spread, violating BS risk-free assumption.
+        r = args.default_r
 
         # Time to maturity
         T = surplus_years if surplus_years and surplus_years > 0.01 else 2.0
@@ -138,10 +136,24 @@ def main():
     db_rows = [r for r in results if r is not None]
     if db_rows:
         con = connect()
-        init_schema(con)
         n = db_upsert(con, "valuation_daily", db_rows, ["trade_date", "code"])
         con.close()
         print(f"[db] valuation_daily BS fields upserted for {n} rows")
+
+    # Also write BS fields back into dataset.json (avoids needing a 2nd assemble run)
+    bs_map = {r["code"]: r for r in db_rows if r}
+    for it in items:
+        bs = bs_map.get(it["code"])
+        if bs:
+            it["bs_value"] = bs["bs_value"]
+            it["relative_value"] = bs["relative_value"]
+            it["bs_delta"] = bs["bs_delta"]
+            it["bs_gamma"] = bs["bs_gamma"]
+            it["bs_theta"] = bs["bs_theta"]
+            it["bs_vega"] = bs["bs_vega"]
+    with open(args.dataset, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=2)
+    print(f"[json] dataset.json updated with BS fields in-place")
 
     # Stats
     rv_vals = [r["relative_value"] for r in db_rows if r and r.get("relative_value") is not None]

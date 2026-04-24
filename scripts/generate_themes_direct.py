@@ -641,7 +641,11 @@ def main():
         for item in dataset["items"]:
             profile = _clean_profile(item.get("profile", "") or item["uname"])
             meta = existing_meta.get(item["code"], {})
-            themes = meta.get("themes") or _resolve_themes(item["code"], profile)
+            # Priority: DB themes (from Shenwan via fetch_cb_universe.py) > keyword rules
+            themes = meta.get("themes")
+            if not themes or themes == ["其他综合"]:
+                themes = _resolve_themes(item["code"], profile)
+            # Priority: DB industry (from Shenwan) > inferred
             industry = meta.get("industry") or (item.get("industry") or "").strip() or _infer_industry(profile, themes)
             row = {
                 "code": item["code"],

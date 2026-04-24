@@ -20,38 +20,36 @@ CREATE TABLE IF NOT EXISTS valuation_daily (
   outstanding_yi DOUBLE,
   rating         TEXT,
   maturity_date  TEXT,
+  conv_price DOUBLE,
+  no_call_start TEXT,
+  no_call_end TEXT,
+  call_trigger_days INTEGER,
+  call_trigger_ratio DOUBLE,
+  has_down_revision TEXT,
+  down_trigger_ratio DOUBLE,
+  ths_industry TEXT,
+  pb DOUBLE,
+  redemp_stop_date TEXT,
+  pe_ttm DOUBLE,
+  total_mv_yi DOUBLE,
+  implied_vol DOUBLE,
+  pure_bond_ytm DOUBLE,
+  ifind_doublelow DOUBLE,
+  option_value DOUBLE,
+  surplus_days INTEGER,
+  surplus_years DOUBLE,
+  accum_conv_ratio DOUBLE,
+  dilution_ratio DOUBLE,
+  bs_value DOUBLE,
+  relative_value DOUBLE,
+  bs_delta DOUBLE,
+  bs_gamma DOUBLE,
+  bs_theta DOUBLE,
+  bs_vega DOUBLE,
+  pure_bond_value DOUBLE,
+  maturity_call_price DOUBLE,
   PRIMARY KEY (trade_date, code)
 );
-
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS change_pct DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS conv_price DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS no_call_start TEXT;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS no_call_end TEXT;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS call_trigger_days INTEGER;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS call_trigger_ratio DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS has_down_revision TEXT;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS down_trigger_ratio DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS ths_industry TEXT;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS pb DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS redemp_stop_date TEXT;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS pe_ttm DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS total_mv_yi DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS implied_vol DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS pure_bond_ytm DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS ifind_doublelow DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS option_value DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS surplus_days INTEGER;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS surplus_years DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS accum_conv_ratio DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS dilution_ratio DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS bs_value DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS relative_value DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS bs_delta DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS bs_gamma DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS bs_theta DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS bs_vega DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS pure_bond_value DOUBLE;
-ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS maturity_call_price DOUBLE;
 
 CREATE TABLE IF NOT EXISTS vol_daily (
   trade_date  TEXT,
@@ -90,13 +88,7 @@ CREATE TABLE IF NOT EXISTS themes (
   PRIMARY KEY (trade_date, code)
 );
 
-CREATE TABLE IF NOT EXISTS etl_runs (
-  run_id      TEXT PRIMARY KEY,
-  trade_date  TEXT,
-  step        TEXT,
-  started_at  TEXT,
-  finished_at TEXT,
-  row_count   INTEGER,
-  status      TEXT,
-  note        TEXT
-);
+-- Secondary indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_val_code_date ON valuation_daily(code, trade_date);
+CREATE INDEX IF NOT EXISTS idx_strat_date_strat ON strategy_picks(trade_date, strategy);
+CREATE INDEX IF NOT EXISTS idx_vol_ucode_date ON vol_daily(ucode, trade_date);
