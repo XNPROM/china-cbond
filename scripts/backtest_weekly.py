@@ -154,14 +154,21 @@ def score_sector_neutral(bonds):
     return picks
 
 
-def compute_avg_return(picks, next_prices, top_n=10):
-    """Compute equal-weight average return for top N picks."""
+def compute_avg_return(picks, sell_prices, top_n=10, buy_prices=None):
+    """Compute equal-weight average return for top N picks.
+
+    If buy_prices provided, use those as entry (T+1 buy);
+    otherwise use pick's price as entry (legacy daily mode).
+    """
     returns = []
     for b in picks[:top_n]:
-        px_today = b.get("price")
-        px_next = next_prices.get(b["code"])
-        if px_today and px_next and px_today > 0:
-            returns.append((px_next - px_today) / px_today)
+        if buy_prices:
+            px_entry = buy_prices.get(b["code"])
+        else:
+            px_entry = b.get("price")
+        px_exit = sell_prices.get(b["code"])
+        if px_entry and px_exit and px_entry > 0:
+            returns.append((px_exit - px_entry) / px_entry)
     if not returns:
         return None, 0
     return sum(returns) / len(returns), len(returns)
@@ -174,6 +181,8 @@ def main():
     ap.add_argument("--days", type=int, default=5, help="trading days to backtest")
     ap.add_argument("--top", type=int, default=10, help="top N picks for return calc")
     ap.add_argument("--skip-fetch", action="store_true", help="use cached data if available")
+    ap.add_argument("--rebalance", default="weekly", choices=["daily", "weekly"], help="rebalance frequency")
+    ap.add_argument("--holding-days", type=int, default=5, help="holding period in trading days for weekly mode")
     args = ap.parse_args()
 
     if args.end_date:
@@ -220,21 +229,42 @@ def main():
         print(f"  {td}: {len(fund)} bonds with conv_prem")
 
     # 5. Run backtest
+    # Build rebalance dates: weekly = every 5th trading day
+    if args.rebalance == "weekly":
+        holding = args.holding_days
+        rebalance_indices = list(range(0, len(trading_dates) - holding, holding))
+        if not rebalance_indices or rebalance_indices[-1] + holding < len(trading_dates) - 1:
+            rebalance_indices.append(rebalance_indices[-1] + holding if rebalance_indices else 0)
+        print(f"[rebalance] weekly mode, {len(rebalance_indices)} rebalance points, holding {holding} days")
+    else:
+        rebalance_indices = list(range(len(trading_dates) - 1))
+        holding = 1
+
     results = []
     cum_dl = 0.0
     cum_sn = 0.0
     cum_mkt = 0.0
+    # Track equity curve at every trading date
+    equity = []  # [{date, cum_dl, cum_sn, cum_mkt}]
+    cum_dl_eq = 0.0
+    cum_sn_eq = 0.0
+    cum_mkt_eq = 0.0
+    eq_idx = 0
 
-    for i in range(len(trading_dates) - 1):
-        td = trading_dates[i]
-        td_next = trading_dates[i + 1]
-        fund = fundamentals.get(td, {})
-        next_prices = {code: prices[code].get(td_next) for code in prices if td_next in prices[code]}
+    for rb_i in rebalance_indices:
+        # T day: select picks using T day's fundamentals
+        td_select = trading_dates[rb_i]
+        # T+1 day: buy at open (use T+1 close as proxy)
+        td_buy = trading_dates[min(rb_i + 1, len(trading_dates) - 1)]
+        # T+1+holding: sell
+        td_sell = trading_dates[min(rb_i + 1 + holding, len(trading_dates) - 1)]
 
-        # Build bond list for this day
+        fund = fundamentals.get(td_select, {})
+
+        # Build bond list for selection day
         day_bonds = []
         for code in codes:
-            px = prices.get(code, {}).get(td)
+            px = prices.get(code, {}).get(td_select)
             if not px:
                 continue
             f = fund.get(code, {})
@@ -249,16 +279,21 @@ def main():
         dl_picks = score_double_low(day_bonds)
         sn_picks = score_sector_neutral(day_bonds)
 
-        # Returns
-        dl_ret, dl_n = compute_avg_return(dl_picks, next_prices, args.top)
-        sn_ret, sn_n = compute_avg_return(sn_picks, next_prices, args.top)
+        # T+1 buy prices, T+1+holding sell prices
+        buy_prices = {code: prices[code].get(td_buy) for code in prices if td_buy in prices[code]}
+        sell_prices = {code: prices[code].get(td_sell) for code in prices if td_sell in prices[code]}
 
-        # Market return (all bonds with price on both days)
+        # Returns: buy at T+1, sell at T+1+holding
+        dl_ret, dl_n = compute_avg_return(dl_picks[:args.top], sell_prices, args.top, buy_prices)
+        sn_ret, sn_n = compute_avg_return(sn_picks[:args.top], sell_prices, args.top, buy_prices)
+
+        # Market return
         mkt_rets = []
         for b in day_bonds:
-            px_next = next_prices.get(b["code"])
-            if b["price"] and px_next and b["price"] > 0:
-                mkt_rets.append((px_next - b["price"]) / b["price"])
+            px_buy = buy_prices.get(b["code"])
+            px_sell = sell_prices.get(b["code"])
+            if px_buy and px_sell and px_buy > 0:
+                mkt_rets.append((px_sell - px_buy) / px_buy)
         mkt_ret = sum(mkt_rets) / len(mkt_rets) if mkt_rets else 0
 
         if dl_ret is not None:
@@ -267,34 +302,40 @@ def main():
             cum_sn += sn_ret
         cum_mkt += mkt_ret
 
-        results.append({
-            "date": td,
-            "date_next": td_next,
-            "n_bonds": len(day_bonds),
-            "n_with_prem": len(fund),
-            "dl_return": round(dl_ret * 100, 3) if dl_ret is not None else None,
-            "dl_n": dl_n,
-            "sn_return": round(sn_ret * 100, 3) if sn_ret is not None else None,
-            "sn_n": sn_n,
-            "mkt_return": round(mkt_ret * 100, 3),
-            "cum_dl": round(cum_dl * 100, 3),
-            "cum_sn": round(cum_sn * 100, 3),
-            "cum_mkt": round(cum_mkt * 100, 3),
-        })
+        # Fill equity curve for all dates in this holding period
+        for d_i in range(rb_i, min(rb_i + 1 + holding, len(trading_dates))):
+            # Interpolate cumulative return linearly within holding period
+            frac = (d_i - rb_i) / max(holding, 1) if d_i > rb_i else 0
+            results.append({
+                "date": trading_dates[d_i],
+                "cum_dl": round(cum_dl_eq + (cum_dl - cum_dl_eq) * frac, 4) if d_i > rb_i else round(cum_dl_eq, 4),
+                "cum_sn": round(cum_sn_eq + (cum_sn - cum_sn_eq) * frac, 4) if d_i > rb_i else round(cum_sn_eq, 4),
+                "cum_mkt": round(cum_mkt_eq + (cum_mkt - cum_mkt_eq) * frac, 4) if d_i > rb_i else round(cum_mkt_eq, 4),
+            })
+
+        cum_dl_eq = cum_dl
+        cum_sn_eq = cum_sn
+        cum_mkt_eq = cum_mkt
+
         dl_s = f"{dl_ret*100:+.3f}%" if dl_ret is not None else "N/A"
         sn_s = f"{sn_ret*100:+.3f}%" if sn_ret is not None else "N/A"
-        print(f"  {td}→{td_next}: 双低={dl_s}(n={dl_n}) 分域={sn_s}(n={sn_n}) 市场={mkt_ret*100:+.3f}% | 累计: 双低={cum_dl*100:+.3f}% 分域={cum_sn*100:+.3f}% 市场={cum_mkt*100:+.3f}%")
+        print(f"  {td_select}选券→{td_buy}买入→{td_sell}卖出: 双低={dl_s}(n={dl_n}) 分域={sn_s}(n={sn_n}) 市场={mkt_ret*100:+.3f}% | 累计: 双低={cum_dl*100:+.3f}% 分域={cum_sn*100:+.3f}% 市场={cum_mkt*100:+.3f}%")
 
     # 6. Summary
-    n_days = len(results)
+    n_rebalances = len(rebalance_indices)
+    n_trading_days = len(trading_dates)
     print(f"\n{'='*70}")
-    print(f"回测区间: {trading_dates[0]} → {trading_dates[-1]} ({n_days} 个交易日)")
+    print(f"回测区间: {trading_dates[0]} → {trading_dates[-1]} ({n_trading_days} 个交易日)")
+    print(f"调仓频率: {args.rebalance} (共{n_rebalances}次调仓, T日选券→T+1买入→持有{holding}日)")
     print(f"{'='*70}")
-    print(f"{'策略':<20} {'累计收益':>10} {'日均收益':>10}")
-    print(f"{'-'*42}")
-    print(f"{'双低Top'+str(args.top):<20} {cum_dl*100:>+9.3f}% {cum_dl*100/n_days:>+9.3f}%")
-    print(f"{'分域双低Top'+str(args.top):<20} {cum_sn*100:>+9.3f}% {cum_sn*100/n_days:>+9.3f}%")
-    print(f"{'全市场等权':<20} {cum_mkt*100:>+9.3f}% {cum_mkt*100/n_days:>+9.3f}%")
+    print(f"{'策略':<20} {'累计收益':>10} {'年化(简易)':>12}")
+    print(f"{'-'*44}")
+    ann_dl = cum_dl * 100 * 250 / n_trading_days if n_trading_days else 0
+    ann_sn = cum_sn * 100 * 250 / n_trading_days if n_trading_days else 0
+    ann_mkt = cum_mkt * 100 * 250 / n_trading_days if n_trading_days else 0
+    print(f"{'双低Top'+str(args.top):<20} {cum_dl*100:>+9.3f}% {ann_dl:>+11.1f}%")
+    print(f"{'分域双低Top'+str(args.top):<20} {cum_sn*100:>+9.3f}% {ann_sn:>+11.1f}%")
+    print(f"{'全市场等权':<20} {cum_mkt*100:>+9.3f}% {ann_mkt:>+11.1f}%")
 
     # 7. Save
     out_dir = f"data/raw/asof={end_ymd}"
@@ -304,11 +345,17 @@ def main():
         json.dump({
             "start_date": trading_dates[0],
             "end_date": trading_dates[-1],
-            "trading_days": n_days,
+            "trading_days": n_trading_days,
+            "rebalance": args.rebalance,
+            "holding_days": holding,
+            "n_rebalances": n_rebalances,
             "cum_return_dl_pct": round(cum_dl * 100, 3),
             "cum_return_sn_pct": round(cum_sn * 100, 3),
             "cum_return_mkt_pct": round(cum_mkt * 100, 3),
-            "daily_results": results,
+            "annualized_dl_pct": round(ann_dl, 1),
+            "annualized_sn_pct": round(ann_sn, 1),
+            "annualized_mkt_pct": round(ann_mkt, 1),
+            "equity_curve": results,
         }, f, ensure_ascii=False, indent=2)
     print(f"\n[done] → {out_path}")
 

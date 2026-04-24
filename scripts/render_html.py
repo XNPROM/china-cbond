@@ -238,17 +238,151 @@ sortRows(); applyFilters();
 """
 
 
+def load_backtest(path):
+    import json
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def dedup_equity(curve):
+    """Remove duplicate dates (rebalance points appear twice)."""
+    seen = set()
+    out = []
+    for pt in curve:
+        if pt["date"] not in seen:
+            out.append(pt)
+            seen.add(pt["date"])
+    return out
+
+
+def render_equity_curve(backtest):
+    """Render an SVG equity curve chart from backtest JSON."""
+    if not backtest:
+        return ""
+    curve = dedup_equity(backtest.get("equity_curve", []))
+    if len(curve) < 2:
+        return ""
+    W, H = 800, 280
+    PAD_L, PAD_R, PAD_T, PAD_B = 55, 20, 30, 40
+    cw = W - PAD_L - PAD_R
+    ch = H - PAD_T - PAD_B
+
+    # Compute y range
+    all_vals = []
+    for pt in curve:
+        all_vals.extend([pt["cum_dl"], pt["cum_sn"], pt["cum_mkt"]])
+    y_min = min(all_vals)
+    y_max = max(all_vals)
+    y_pad = max((y_max - y_min) * 0.1, 0.005)
+    y_min -= y_pad
+    y_max += y_pad
+    if y_min > -0.01:
+        y_min = -0.01
+    if y_max < 0.01:
+        y_max = 0.01
+
+    def x(i):
+        return PAD_L + (i / (len(curve) - 1)) * cw
+
+    def y(v):
+        return PAD_T + ch - ((v - y_min) / (y_max - y_min)) * ch
+
+    # Grid lines
+    grid_lines = ""
+    n_grid = 5
+    for gi in range(n_grid + 1):
+        gy = PAD_T + (gi / n_grid) * ch
+        gv = y_max - (gi / n_grid) * (y_max - y_min)
+        label = f"{gv*100:+.1f}%"
+        grid_lines += f'<line x1="{PAD_L}" y1="{gy:.1f}" x2="{W-PAD_R}" y2="{gy:.1f}" stroke="#e5e5e5" stroke-width="1"/>'
+        grid_lines += f'<text x="{PAD_L-5}" y="{gy:.1f}" text-anchor="end" font-size="10" fill="#888">{label}</text>'
+
+    # Date labels (sparse)
+    date_labels = ""
+    step = max(1, len(curve) // 8)
+    for i in range(0, len(curve), step):
+        d = curve[i]["date"]
+        label = f"{d[4:6]}/{d[6:8]}"
+        date_labels += f'<text x="{x(i):.1f}" y="{H-PAD_B+16}" text-anchor="middle" font-size="10" fill="#888">{label}</text>'
+    # Always show last
+    d = curve[-1]["date"]
+    date_labels += f'<text x="{x(len(curve)-1):.1f}" y="{H-PAD_B+16}" text-anchor="middle" font-size="10" fill="#888">{d[4:6]}/{d[6:8]}</text>'
+
+    # Zero line
+    zero_y = y(0)
+    zero_line = f'<line x1="{PAD_L}" y1="{zero_y:.1f}" x2="{W-PAD_R}" y2="{zero_y:.1f}" stroke="#ccc" stroke-width="1" stroke-dasharray="4,3"/>'
+
+    # Lines
+    def make_line(key, color):
+        pts = " ".join(f"{x(i):.1f},{y(pt[key]):.1f}" for i, pt in enumerate(curve))
+        return f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2"/>'
+
+    line_dl = make_line("cum_dl", "#2563eb")
+    line_sn = make_line("cum_sn", "#f59e0b")
+    line_mkt = make_line("cum_mkt", "#9ca3af")
+
+    # End labels
+    last = curve[-1]
+    end_labels = ""
+    for key, color, label in [("cum_dl", "#2563eb", "双低"), ("cum_sn", "#f59e0b", "分域双低"), ("cum_mkt", "#9ca3af", "全市场")]:
+        ey = y(last[key])
+        val = f"{last[key]*100:+.2f}%"
+        end_labels += f'<text x="{W-PAD_R+3}" y="{ey:.1f}" font-size="10" fill="{color}" font-weight="600">{val}</text>'
+
+    # Legend
+    legend = ""
+    for i, (color, label) in enumerate([("#2563eb", "双低Top10"), ("#f59e0b", "分域双低Top10"), ("#9ca3af", "全市场等权")]):
+        lx = PAD_L + i * 130
+        legend += f'<rect x="{lx}" y="6" width="14" height="10" rx="2" fill="{color}"/>'
+        legend += f'<text x="{lx+18}" y="15" font-size="11" fill="#333">{label}</text>'
+
+    # Summary stats
+    cum_dl = backtest.get("cum_return_dl_pct", 0)
+    cum_sn = backtest.get("cum_return_sn_pct", 0)
+    cum_mkt = backtest.get("cum_return_mkt_pct", 0)
+    ann_dl = backtest.get("annualized_dl_pct", 0)
+    ann_sn = backtest.get("annualized_sn_pct", 0)
+    ann_mkt = backtest.get("annualized_mkt_pct", 0)
+    start_d = backtest.get("start_date", "")
+    end_d = backtest.get("end_date", "")
+    n_reb = backtest.get("n_rebalances", 0)
+    n_td = backtest.get("trading_days", 0)
+
+    stats_html = (
+        f'<div style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px;margin-top:8px">'
+        f'<div>区间: {start_d}→{end_d} ({n_td}交易日, {n_reb}次周度调仓)</div>'
+        f'<div>双低: 累计{cum_dl:+.2f}% / 年化{ann_dl:+.1f}%</div>'
+        f'<div>分域双低: 累计{cum_sn:+.2f}% / 年化{ann_sn:+.1f}%</div>'
+        f'<div>全市场: 累计{cum_mkt:+.2f}% / 年化{ann_mkt:+.1f}%</div>'
+        f'</div>'
+    )
+
+    svg = (
+        f'<svg viewBox="0 0 {W} {H}" style="width:100%;max-width:{W}px;height:auto">'
+        f'{grid_lines}{zero_line}{line_mkt}{line_dl}{line_sn}{end_labels}{date_labels}{legend}'
+        f'</svg>'
+    )
+
+    return (
+        f'<section class="strategy-section" id="回测曲线">'
+        f'<h2>回测净值曲线 (周度调仓, T+1买入)</h2>'
+        f'{svg}{stats_html}</section>'
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--title", default="可转债概览")
     ap.add_argument("--trade-date", default="", help="YYYY-MM-DD shown in header")
+    ap.add_argument("--backtest", default="", help="backtest JSON for equity curve")
     args = ap.parse_args()
 
     with open(args.inp, encoding="utf-8") as f:
         report = parse_markdown(f.read())
-    html_out = build_html(report, args.title, args.trade_date)
+    backtest = load_backtest(args.backtest) if args.backtest else None
+    html_out = build_html(report, args.title, args.trade_date, backtest)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(html_out)
     print(f"[done] → {args.out} ({os.path.getsize(args.out)} bytes)")
@@ -661,11 +795,12 @@ def render_group(section, idx):
     )
 
 
-def build_html(report, title, trade_date=""):
+def build_html(report, title, trade_date="", backtest=None):
     build_category_index(report["sections"])
     date_display = trade_date or (report["title"].split("·")[-1].strip() if "·" in report.get("title", "") else "")
     groups_html = "".join(render_group(s, i) for i, s in enumerate(report["sections"]))
     strategy_html = render_strategy(report["strategy_picks"])
+    backtest_html = render_equity_curve(backtest)
     appendix_html = ""
     if report["appendix"]:
         items = "".join(f"<li>{html.escape(line)}</li>" for line in report["appendix"])
@@ -713,6 +848,7 @@ def build_html(report, title, trade_date=""):
   <div class="result-info">当前命中 <strong id="resultCount">0</strong> 只转债 <span id="exportStatus"></span></div>
   <div id="empty" class="empty">没有匹配结果</div>
   {strategy_html}
+  {backtest_html}
   {groups_html}
 </div>
 {appendix_html}
