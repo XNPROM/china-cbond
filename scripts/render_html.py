@@ -45,7 +45,7 @@ header h1{font-size:22px;font-weight:700;margin:0 0 4px}
 .controls input[type=search]:focus{border-color:var(--accent)}
 .controls select{
   padding:7px 8px;border:1px solid var(--border);border-radius:6px;font:13px/1.4 var(--font);
-  background:var(--bg);cursor:pointer;
+  background:var(--bg);cursor:pointer;max-width:130px;
 }
 .ftag{
   padding:5px 10px;border:1px solid var(--border);border-radius:4px;font-size:12px;
@@ -133,9 +133,10 @@ footer h2{font-size:14px;font-weight:600;color:var(--text);margin:0 0 8px}
 
 
 JS = r"""
-const state = { query: "", quick: "all", sort: "default" };
+const state = { query: "", quick: "all", sort: "default", theme: "" };
 const searchInput = document.querySelector("#search");
 const sortSelect = document.querySelector("#sort");
+const themeSelect = document.querySelector("#themeFilter");
 const resultCount = document.querySelector("#resultCount");
 const emptyEl = document.querySelector("#empty");
 const quickButtons = [...document.querySelectorAll("[data-quick]")];
@@ -160,11 +161,12 @@ function matchQuick(row) {
   return true;
 }
 function matchQuery(row) { return !state.query || (row.dataset.search||"").includes(state.query); }
+function matchTheme(row) { return !state.theme || (row.dataset.themes||"").split("|").includes(state.theme); }
 
 function applyFilters() {
   let vis = 0;
   bondRows.forEach(row => {
-    const show = matchQuick(row) && matchQuery(row);
+    const show = matchQuick(row) && matchQuery(row) && matchTheme(row);
     row.hidden = !show;
     if (show) vis++;
   });
@@ -196,6 +198,7 @@ function sortRows() {
 
 searchInput.addEventListener("input", e => { state.query = normQ(e.target.value); applyFilters(); });
 sortSelect.addEventListener("change", e => { state.sort = e.target.value; sortRows(); applyFilters(); });
+themeSelect.addEventListener("change", e => { state.theme = e.target.value; applyFilters(); });
 quickButtons.forEach(btn => {
   btn.addEventListener("click", () => {
     state.quick = btn.dataset.quick;
@@ -787,7 +790,8 @@ def render_group(section, idx):
             f'data-pure-bond-ytm="{html.escape(card.get("pure_bond_ytm", ""), quote=True)}" '
             f'data-relative-value="{html.escape(rv_text, quote=True)}" '
             f'data-delta="{html.escape(delta_text, quote=True)}" '
-            f'data-strategy="{html.escape(card.get("strategy", ""), quote=True)}">'
+            f'data-strategy="{html.escape(card.get("strategy", ""), quote=True)}" '
+            f'data-themes="{"|".join(html.escape(t) for t in card.get("themes", []))}">'
             f'<td class="bname">{html.escape(card["bond_name"])}{sector_badge}<small>{html.escape(stock_name)} · {html.escape(card["industry"])}</small></td>'
             f'<td class="bcode">{html.escape(card["bond_code"])}</td>'
             f'<td class="bprice">{html.escape(card["price"])}<br><span class="{sc}" style="font-size:11px;font-weight:400">{html.escape(chg_text)}</span></td>'
@@ -831,6 +835,16 @@ def build_html(report, title, trade_date="", backtest=None):
 
     summary_text = " · ".join(html.escape(s) for s in report["summary"][:3]) if report["summary"] else ""
 
+    # Collect unique theme tags across all bonds for the filter dropdown
+    all_themes = set()
+    for section in report["sections"]:
+        for card in section["cards"]:
+            all_themes.update(card.get("themes", []))
+    theme_options = "".join(
+        f'<option value="{html.escape(t)}">{html.escape(t)}</option>'
+        for t in sorted(all_themes)
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -853,6 +867,10 @@ def build_html(report, title, trade_date="", backtest=None):
       <option value="dayChgAsc">涨幅 低→高</option>
       <option value="volDesc">波动率 高→低</option>
       <option value="balanceDesc">余额 高→低</option>
+    </select>
+    <select id="themeFilter">
+      <option value="">全部题材</option>
+      {theme_options}
     </select>
     <button class="ftag is-active" type="button" data-quick="all">全部</button>
     <button class="ftag" type="button" data-quick="highPrice">价格&gt;130</button>

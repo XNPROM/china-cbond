@@ -88,6 +88,23 @@ python3 scripts/backtest_weekly.py --start-date 2026-01-23 --end-date 2026-04-23
 
 Features: multiplicative compounding, configurable slippage/commission, PE>0 + vol>Q1 filters matching live strategy, historical universe from valuation_daily.
 
+## Data Freshness Check
+
+iFinD bond-side fields (conv_prem_pct, pure_bond_value, maturity_call_price) can return NULL when data hasn't been processed yet (e.g., fetched too early after market close). Use `refresh_data.py` to detect and fix:
+
+```bash
+# Check only:
+python3 scripts/refresh_data.py --trade-date 2026-04-24
+
+# Re-fetch stale fields:
+python3 scripts/refresh_data.py --trade-date 2026-04-24 --fix
+
+# Force re-fetch all bond-side fields:
+python3 scripts/refresh_data.py --trade-date 2026-04-24 --fix --force
+```
+
+After refreshing, re-run steps 3–8 of the pipeline.
+
 ## Architecture
 
 ### Data Flow
@@ -130,6 +147,7 @@ iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
 | `backtest_weekly.py` | Weekly-rebalanced backtest engine |
 | `backfill.py` | One-shot raw data loader into DuckDB |
 | `init_db.py` | Idempotent schema initializer |
+| `refresh_data.py` | Data freshness check + iFinD re-fetch for stale fields |
 
 Archived scripts in `scripts/archive/`: `discover_universe.py`, `generate_themes_with_claude.py`, `load_themes.py`, `sample_one.py`.
 

@@ -641,10 +641,14 @@ def main():
         for item in dataset["items"]:
             profile = _clean_profile(item.get("profile", "") or item["uname"])
             meta = existing_meta.get(item["code"], {})
-            # Priority: DB themes (from Shenwan via fetch_cb_universe.py) > keyword rules
-            themes = meta.get("themes")
+            # Priority: keyword rules > DB Shenwan data
+            # DB themes (from fetch_cb_universe.py) are raw Shenwan L2/L3 names;
+            # keyword rules produce the proper theme tags used in the report.
+            themes = _resolve_themes(item["code"], profile)
             if not themes or themes == ["其他综合"]:
-                themes = _resolve_themes(item["code"], profile)
+                db_themes = meta.get("themes")
+                if db_themes and db_themes != ["其他综合"]:
+                    themes = db_themes
             # Priority: DB industry (from Shenwan) > inferred
             industry = meta.get("industry") or (item.get("industry") or "").strip() or _infer_industry(profile, themes)
             row = {
