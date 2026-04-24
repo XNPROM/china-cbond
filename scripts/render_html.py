@@ -213,15 +213,21 @@ document.querySelectorAll(".group-head").forEach(h => {
 document.querySelector("#copyCodes").addEventListener("click", async () => {
   const codes = bondRows.filter(r => !r.hidden).map(r => r.dataset.bondCode).filter(Boolean);
   if (!codes.length) return;
-  try { await navigator.clipboard.writeText(codes.join("\n")); } catch(_) {}
-  document.querySelector("#exportStatus").textContent = "已复制 " + codes.length + " 个代码";
-  setTimeout(() => document.querySelector("#exportStatus").textContent = "", 2000);
+  try {
+    await navigator.clipboard.writeText(codes.join("\n"));
+    document.querySelector("#exportStatus").textContent = "已复制 " + codes.length + " 个代码";
+    setTimeout(() => document.querySelector("#exportStatus").textContent = "", 2000);
+  } catch(_) {
+    document.querySelector("#exportStatus").textContent = "复制失败，请手动复制";
+    setTimeout(() => document.querySelector("#exportStatus").textContent = "", 2000);
+  }
 });
 document.querySelector("#exportCsv").addEventListener("click", () => {
   const vis = bondRows.filter(r => !r.hidden);
   if (!vis.length) return;
+  const esc = v => { const s = String(v||""); return s.includes(",")||s.includes('"')||s.includes("\n") ? '"'+s.replace(/"/g,'""')+'"' : s; };
   const h = "bond_code,bond_name,stock_code,stock_name,price,day_chg,conv_prem,pure_prem,vol,balance,rating,maturity";
-  const rows = vis.map(r => [r.dataset.bondCode,r.dataset.bondName,r.dataset.stockCode,r.dataset.stockName,r.dataset.price,r.dataset.daychg,r.dataset.conv,r.dataset.pure,r.dataset.vol,r.dataset.balance,r.dataset.rating,r.dataset.maturity].map(v => String(v||"")).join(","));
+  const rows = vis.map(r => [r.dataset.bondCode,r.dataset.bondName,r.dataset.stockCode,r.dataset.stockName,r.dataset.price,r.dataset.daychg,r.dataset.conv,r.dataset.pure,r.dataset.vol,r.dataset.balance,r.dataset.rating,r.dataset.maturity].map(esc).join(","));
   const blob = new Blob(["﻿"+h+"\n"+rows.join("\n")], {type:"text/csv;charset=utf-8;"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "cbond_"+Date.now()+".csv";
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
@@ -240,9 +246,11 @@ def main():
     ap.add_argument("--trade-date", default="", help="YYYY-MM-DD shown in header")
     args = ap.parse_args()
 
-    report = parse_markdown(open(args.inp, encoding="utf-8").read())
+    with open(args.inp, encoding="utf-8") as f:
+        report = parse_markdown(f.read())
     html_out = build_html(report, args.title, args.trade_date)
-    open(args.out, "w", encoding="utf-8").write(html_out)
+    with open(args.out, "w", encoding="utf-8") as f:
+        f.write(html_out)
     print(f"[done] → {args.out} ({os.path.getsize(args.out)} bytes)")
 
 
@@ -410,9 +418,7 @@ def parse_card(lines, start_idx):
         "conv": metrics.get("转股溢价率", ""),
         "pure": metrics.get("纯债溢价率", ""),
         "vol": metrics.get("20日年化σ", ""),
-        "implied_vol": metrics.get("隐含波动率", ""),
         "pure_bond_ytm": metrics.get("纯债YTM", ""),
-        "surplus_years": metrics.get("剩余(年)", ""),
         "relative_value": metrics.get("相对价值", ""),
         "delta": metrics.get("Delta", ""),
         "balance": metrics.get("余额(亿)", ""),
@@ -495,11 +501,11 @@ def render_strategy(strategy_picks):
         by_strat[s]["rows"].append(item["cells"])
 
     STRAT_META = {
-        "双低": {"icon": "📊", "color": "#2563eb"},
-        "双低-偏股": {"icon": "📈", "color": "#2e7d32"},
-        "双低-平衡": {"icon": "⚖️", "color": "#e65100"},
-        "双低-偏债": {"icon": "🛡️", "color": "#1565c0"},
-        "低估": {"icon": "💎", "color": "#7c3aed"},
+        "双低": {"icon": "📊"},
+        "双低-偏股": {"icon": "📈"},
+        "双低-平衡": {"icon": "⚖️"},
+        "双低-偏债": {"icon": "🛡️"},
+        "低估": {"icon": "💎"},
     }
 
     sections_html = ""
@@ -589,8 +595,7 @@ def render_group(section, idx):
             f'data-stock-code="{html.escape(stock_code, quote=True)}" '
             f'data-stock-name="{html.escape(stock_name, quote=True)}" '
             f'data-rating="{html.escape(card["rating"], quote=True)}" '
-            f'data-maturity="{html.escape(card["maturity"], quote=True)}" '
-            f'data-pure="{num_value(card["pure"])}">'
+            f'data-maturity="{html.escape(card["maturity"], quote=True)}">'
             f'<td class="bname">{html.escape(card["bond_name"])}{sector_badge}<small>{html.escape(stock_name)} · {html.escape(card["industry"])}</small></td>'
             f'<td class="bcode">{html.escape(card["bond_code"])}</td>'
             f'<td class="bprice">{html.escape(card["price"])}<br><span class="{sc}" style="font-size:11px;font-weight:400">{html.escape(chg_text)}</span></td>'

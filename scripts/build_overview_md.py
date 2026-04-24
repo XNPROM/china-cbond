@@ -18,6 +18,11 @@ def _fmt_pct(x):
     return "" if x is None else f"{x:.2f}%"
 
 
+def _fmt_vol(x):
+    """Format vol_20d (stored as decimal, e.g. 0.35=35%) as percentage string."""
+    return "" if x is None else f"{x * 100:.2f}%"
+
+
 def _fmt_signed_pct(x):
     if x is None:
         return ""
@@ -129,7 +134,7 @@ def main():
         if not theme_row:
             continue
         merged = {**item, **theme_row}
-        merged["primary_theme"] = merged["themes"][0]
+        merged["primary_theme"] = merged["themes"][0] if merged["themes"] else "其他"
         rows.append(merged)
 
     rows.sort(key=lambda x: (x["primary_theme"], x["name"]))
@@ -153,7 +158,7 @@ def main():
     lines.append("")
     lines.append("## 摘要")
     lines.append(f"- 总数 {len(rows)} 只；{sum(1 for v in price_values if v > 130)} 只价格 >130，{sum(1 for v in price_values if v < 90)} 只价格 <90")
-    lines.append(f"- 转股溢价率中位数 {statistics.median(conv_values):.2f}%，纯债溢价率中位数 {statistics.median(pure_values):.2f}%")
+    lines.append(f"- 转股溢价率中位数 {statistics.median(conv_values):.2f}%，纯债溢价率中位数 {statistics.median(pure_values):.2f}%" if conv_values and pure_values else "")
     if rv_values:
         rv_under = sum(1 for v in rv_values if v < 1.0)
         lines.append(f"- 相对价值中位数 {statistics.median(rv_values):.2f}；{rv_under} 只低估（<1.0），{len(rv_values)-rv_under} 只合理或高估")
@@ -174,12 +179,11 @@ def main():
     }
     lines.append("")
     lines.append("## 策略推荐")
+    STRAT_ORDER = ["双低", "双低-偏股", "双低-平衡", "双低-偏债", "低估"]
+    by_strat = defaultdict(list)
+    for sp in strategy_list:
+        by_strat[sp["strategy"]].append(sp)
     if strategy_list:
-        # Group by strategy type, with explicit ordering
-        STRAT_ORDER = ["双低", "双低-偏股", "双低-平衡", "双低-偏债", "低估"]
-        by_strat = defaultdict(list)
-        for sp in strategy_list:
-            by_strat[sp["strategy"]].append(sp)
 
         for strat_name in STRAT_ORDER:
             picks = by_strat.get(strat_name)
@@ -200,7 +204,7 @@ def main():
                 lines.append(
                     f"| {i+1} | {row['name']} ({row['code']}) | {row.get('uname','')} | "
                     f"{_fmt_num(row.get('latest'))} | {_fmt_pct(row.get('conv_prem'))} | "
-                    f"{_fmt_num(row.get('pe_ttm'))} | {_fmt_pct(row.get('vol_20d'))} | "
+                    f"{_fmt_num(row.get('pe_ttm'))} | {_fmt_vol(row.get('vol_20d'))} | "
                     f"{sp['rank_overall']:.1f} |"
                 )
     else:
@@ -215,7 +219,7 @@ def main():
             lines.append(f"### {row['name']} ({row['code']})")
             lines.append("")
             lines.append("| 正股 | 申万一级 | 申万二级 | 价格 | 涨跌幅 | 转股溢价率 | 纯债溢价率 | 20日年化σ | 纯债YTM | 余额(亿) | 评级 | 到期 | 剩余(年) | 转股价 | PE | PB | 市值(亿) | 相对价值 | Delta | 强赎 | 下修 | 策略分 |")
-            lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+            lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
             call_label = _call_status(row)
             down_label = _down_status(row)
@@ -226,14 +230,14 @@ def main():
             strat_label_parts = []
             for s in strategy_list:
                 if s["code"] == row['code']:
-                    idx = strategy_list.index(s) + 1
-                    strat_label_parts.append(f"{s['strategy']}#{idx}")
+                    rank_in_strat = sum(1 for s2 in by_strat.get(s["strategy"], []) if s2["rank_overall"] <= s["rank_overall"])
+                    strat_label_parts.append(f"{s['strategy']}#{rank_in_strat}")
             strat_label = " ".join(strat_label_parts) if strat_label_parts else ""
 
             lines.append(
                 f"| {row['uname']} ({row['ucode']}) | {sw_l1} | {sw_l2} | "
                 f"{_fmt_num(row.get('latest'))} | {_fmt_signed_pct(row.get('day_chg'))} | {_fmt_pct(row.get('conv_prem'))} | "
-                f"{_fmt_pct(row.get('pure_prem'))} | {_fmt_pct(row.get('vol_20d'))} | "
+                f"{_fmt_pct(row.get('pure_prem'))} | {_fmt_vol(row.get('vol_20d'))} | "
                 f"{_fmt_ytm(row.get('pure_bond_ytm'))} | "
                 f"{_fmt_num(row.get('balance'))} | {row.get('rating','')} | {_fmt_date(row.get('maturity'))} | "
                 f"{_fmt_num(row.get('surplus_years'))} | "

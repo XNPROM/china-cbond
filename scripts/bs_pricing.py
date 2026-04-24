@@ -84,7 +84,7 @@ def main():
         if not all(v is not None for v in [price, conv_prem, vol_20d]):
             results.append(None)
             continue
-        if price <= 0 or conv_prem <= -100 or vol_20d <= 0:
+        if price <= 0 or conv_prem <= -90 or vol_20d <= 0:
             results.append(None)
             continue
 
@@ -100,7 +100,7 @@ def main():
         sigma = vol_20d
 
         # Discount rate
-        if ytm and -200 < ytm < 200:
+        if ytm is not None and -100 < ytm < 100:
             r = ytm / 100
         else:
             r = args.default_r
@@ -144,8 +144,8 @@ def main():
         print(f"[db] valuation_daily BS fields upserted for {n} rows")
 
     # Stats
-    rv_vals = [r["relative_value"] for r in db_rows if r and r.get("relative_value")]
-    delta_vals = [r["bs_delta"] for r in db_rows if r and r.get("bs_delta")]
+    rv_vals = [r["relative_value"] for r in db_rows if r and r.get("relative_value") is not None]
+    delta_vals = [r["bs_delta"] for r in db_rows if r and r.get("bs_delta") is not None]
     if rv_vals:
         rv_sorted = sorted(rv_vals)
         print(f"[stats] relative_value: median={rv_sorted[len(rv_sorted)//2]:.2f}, "
