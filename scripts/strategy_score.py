@@ -183,7 +183,6 @@ def main():
         for row in all_picks
     ]
     con = connect()
-    init_schema(con)
     n = db_upsert(con, "strategy_picks", db_rows, ["trade_date", "code", "strategy"])
     con.close()
     print(f"[db] strategy_picks upserted {n} rows")

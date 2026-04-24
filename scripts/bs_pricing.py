@@ -112,11 +112,14 @@ def main():
             results.append(None)
             continue
 
-        # Pure bond value: use iFinD value if available, else approximate
+        # Pure bond value: use iFinD value if available.
+        # If unavailable, skip this bond — K*exp(-rT) ignores coupons
+        # and credit spread, producing unreliable bs_value.
         if pure_bond_val and pure_bond_val > 0:
             pbv = pure_bond_val
         else:
-            pbv = K * math.exp(-r * T)
+            results.append(None)
+            continue
 
         total_val = option_val + pbv
         rel_val = price / total_val if total_val > 0 else None
@@ -158,15 +161,20 @@ def main():
     # Stats
     rv_vals = [r["relative_value"] for r in db_rows if r and r.get("relative_value") is not None]
     delta_vals = [r["bs_delta"] for r in db_rows if r and r.get("bs_delta") is not None]
+    def _median(vals):
+        s = sorted(vals)
+        n = len(s)
+        if n % 2 == 1:
+            return s[n // 2]
+        return (s[n // 2 - 1] + s[n // 2]) / 2
+
     if rv_vals:
-        rv_sorted = sorted(rv_vals)
-        print(f"[stats] relative_value: median={rv_sorted[len(rv_sorted)//2]:.2f}, "
+        print(f"[stats] relative_value: median={_median(rv_vals):.2f}, "
               f"<1.0:{sum(1 for v in rv_vals if v<1.0)}, "
               f"1.0-1.2:{sum(1 for v in rv_vals if 1.0<=v<1.2)}, "
               f">1.2:{sum(1 for v in rv_vals if v>=1.2)}")
     if delta_vals:
-        d_sorted = sorted(delta_vals)
-        print(f"[stats] delta: median={d_sorted[len(d_sorted)//2]:.3f}, "
+        print(f"[stats] delta: median={_median(delta_vals):.3f}, "
               f"<0.1:{sum(1 for v in delta_vals if v<0.1)}, "
               f"0.1-0.5:{sum(1 for v in delta_vals if 0.1<=v<0.5)}, "
               f">0.5:{sum(1 for v in delta_vals if v>=0.5)}")

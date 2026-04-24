@@ -1,15 +1,16 @@
-"""Simple 1-week backtest for convertible bond strategies.
+"""1-week backtest for convertible bond strategies.
 
 Fetches historical daily data:
   - OHLCV from cmd_history_quotation (batch, fast)
-  - Conv premium + balance from basic_data_service (per-day, slower)
+  - Conv premium + balance + PE + vol from basic_data_service (per-day, slower)
 Runs double-low and sector-neutral strategies on each day,
 tracks cumulative returns over the period.
 
-Improvements over naive version:
+Key design choices:
   - Multiplicative compounding (not additive)
-  - Configurable slippage + commission
-  - Historical universe (bonds with price data on each date, no survivorship bias)
+  - Configurable slippage + commission (applied symmetrically)
+  - Historical universe (bonds with price data on each date)
+  - PE>0 and vol>Q1 filters matching strategy_score.py
   - Deduplicated equity curve (keeps last occurrence on tie)
 
 Usage:
@@ -18,6 +19,7 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -30,7 +32,7 @@ from _ifind import basic_data, history, batched
 
 
 SLIPPAGE_BPS = 10       # one-way slippage in basis points (0.1%)
-COMMISSION_BPS = 2      # round-trip commission in basis points (0.02%)
+COMMISSION_BPS = 2       # total commission in basis points, split half buy/half sell
 
 
 def _yyyymmdd(dt):
@@ -47,6 +49,13 @@ def _safe_float(arr, idx):
         return float(v)
     except (ValueError, TypeError):
         return None
+
+
+def _interp_log(start, end, frac):
+    """Geometric interpolation in log-space for multiplicative equity."""
+    if start <= 0 or end <= 0:
+        return 0.0
+    return start * math.exp(frac * math.log(end / start))
 
 
 def fetch_trading_dates(codes, start_ymd, end_ymd):
@@ -90,14 +99,16 @@ def fetch_history_prices(codes, start_ymd, end_ymd):
 
 
 def fetch_day_fundamentals(codes, date_ymd):
-    """Fetch conv_prem and balance for a specific date via basic_data."""
+    """Fetch conv_prem, balance, PE_TTM, and 20d vol for a specific date."""
     date_param = f"{date_ymd[:4]}-{date_ymd[4:6]}-{date_ymd[6:]}"
     fields = [
         {"indicator": "ths_conversion_premium_rate_cbond", "indiparams": [date_param]},
         {"indicator": "ths_bond_balance_cbond", "indiparams": [date_param]},
+        {"indicator": "ths_pe_ttm_cbond", "indiparams": [date_param]},
+        {"indicator": "ths_vol_20d_cbond", "indiparams": [date_param]},
     ]
     result = {}
-    for batch_codes in batched(codes, 50):
+    for batch_codes in batched(codes, 40):
         try:
             r = basic_data(batch_codes, fields)
             for t in r.get("tables", []):
@@ -105,8 +116,15 @@ def fetch_day_fundamentals(codes, date_ymd):
                 tbl = t.get("table", {})
                 conv_prem = _safe_float(tbl.get("ths_conversion_premium_rate_cbond", []), 0)
                 balance = _safe_float(tbl.get("ths_bond_balance_cbond", []), 0)
+                pe_ttm = _safe_float(tbl.get("ths_pe_ttm_cbond", []), 0)
+                vol_20d = _safe_float(tbl.get("ths_vol_20d_cbond", []), 0)
                 if conv_prem is not None:
-                    result[code] = {"conv_prem": conv_prem, "balance": balance}
+                    result[code] = {
+                        "conv_prem": conv_prem,
+                        "balance": balance,
+                        "pe_ttm": pe_ttm,
+                        "vol_20d": vol_20d,
+                    }
             time.sleep(0.12)
         except Exception as e:
             print(f"[warn] basic_data batch for {date_ymd}: {e}")
@@ -123,38 +141,43 @@ def classify_sector(conv_prem):
     return "偏债"
 
 
+def _percentile(sorted_vals, pct):
+    if not sorted_vals:
+        return 0
+    k = (len(sorted_vals) - 1) * pct / 100
+    lo = int(k)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = k - lo
+    return sorted_vals[lo] + frac * (sorted_vals[hi] - sorted_vals[lo])
+
+
+def _apply_pe_vol_filter(eligible):
+    """Apply PE>0 and vol>Q1 filters matching strategy_score.py."""
+    # PE > 0 (mandatory, bonds without PE excluded)
+    eligible = [b for b in eligible if b.get("pe_ttm") is not None and b["pe_ttm"] > 0]
+    # vol > Q1 (mandatory, bonds without vol excluded)
+    eligible = [b for b in eligible if b.get("vol_20d") is not None]
+    if not eligible:
+        return eligible
+    vol_vals = sorted(b["vol_20d"] for b in eligible)
+    vol_q1 = _percentile(vol_vals, 25)
+    eligible = [b for b in eligible if b["vol_20d"] >= vol_q1]
+    return eligible
+
+
 def score_double_low(bonds):
     """Classic double-low: rank = 1.5*rank(conv_prem) + rank(price).
-    Filters: balance > 0, conv_prem not None, price present.
-    Matches strategy_score.py: also requires PE > 0 and vol > Q1 when available.
+    Filters matching strategy_score.py: PE>0, vol>Q1, balance>0, conv_prem not None.
     """
     eligible = [b for b in bonds if b.get("conv_prem") is not None and b.get("price") and b.get("balance") and b["balance"] > 0]
-    if not eligible:
-        return []
-
-    # Optional PE filter (when available in fundamentals)
-    has_pe = any(b.get("pe_ttm") is not None for b in eligible)
-    if has_pe:
-        eligible = [b for b in eligible if b.get("pe_ttm") is None or b["pe_ttm"] > 0]
-
-    # Optional vol filter: vol > Q1 (when available)
-    has_vol = any(b.get("vol_20d") is not None for b in eligible)
-    if has_vol and len(eligible) > 4:
-        vol_vals = sorted(b["vol_20d"] for b in eligible if b.get("vol_20d") is not None)
-        if vol_vals:
-            k = (len(vol_vals) - 1) * 0.25
-            lo = int(k)
-            hi = min(lo + 1, len(vol_vals) - 1)
-            vol_q1 = vol_vals[lo] + (k - lo) * (vol_vals[hi] - vol_vals[lo])
-            eligible = [b for b in eligible if b.get("vol_20d") is None or b["vol_20d"] >= vol_q1]
-
+    eligible = _apply_pe_vol_filter(eligible)
     if not eligible:
         return []
 
     by_cp = sorted(eligible, key=lambda x: x["conv_prem"])
     by_px = sorted(eligible, key=lambda x: x["price"])
-    cp_rank = {b["code"]: i for i, b in enumerate(by_cp)}
-    px_rank = {b["code"]: i for i, b in enumerate(by_px)}
+    cp_rank = {b["code"]: i + 1 for i, b in enumerate(by_cp)}
+    px_rank = {b["code"]: i + 1 for i, b in enumerate(by_px)}
     for b in eligible:
         b["dl_score"] = 1.5 * cp_rank.get(b["code"], 999) + px_rank.get(b["code"], 999)
     eligible.sort(key=lambda x: x["dl_score"])
@@ -173,29 +196,14 @@ def score_sector_neutral(bonds):
         bonds_s = by_sector.get(sec, [])
         if not bonds_s:
             continue
-
-        # Same PE/vol filters as score_double_low
-        has_pe = any(b.get("pe_ttm") is not None for b in bonds_s)
-        if has_pe:
-            bonds_s = [b for b in bonds_s if b.get("pe_ttm") is None or b["pe_ttm"] > 0]
-
-        has_vol = any(b.get("vol_20d") is not None for b in bonds_s)
-        if has_vol and len(bonds_s) > 4:
-            vol_vals = sorted(b["vol_20d"] for b in bonds_s if b.get("vol_20d") is not None)
-            if vol_vals:
-                k = (len(vol_vals) - 1) * 0.25
-                lo = int(k)
-                hi = min(lo + 1, len(vol_vals) - 1)
-                vol_q1 = vol_vals[lo] + (k - lo) * (vol_vals[hi] - vol_vals[lo])
-                bonds_s = [b for b in bonds_s if b.get("vol_20d") is None or b["vol_20d"] >= vol_q1]
-
+        bonds_s = _apply_pe_vol_filter(bonds_s)
         if not bonds_s:
             continue
 
         by_cp = sorted(bonds_s, key=lambda x: x["conv_prem"])
         by_px = sorted(bonds_s, key=lambda x: x["price"])
-        cp_rank = {b["code"]: i for i, b in enumerate(by_cp)}
-        px_rank = {b["code"]: i for i, b in enumerate(by_px)}
+        cp_rank = {b["code"]: i + 1 for i, b in enumerate(by_cp)}
+        px_rank = {b["code"]: i + 1 for i, b in enumerate(by_px)}
         for b in bonds_s:
             b["dl_score"] = 1.5 * cp_rank.get(b["code"], 999) + px_rank.get(b["code"], 999)
         bonds_s.sort(key=lambda x: x["dl_score"])
@@ -211,10 +219,12 @@ def compute_avg_return(picks, sell_prices, top_n=10, buy_prices=None,
 
     If buy_prices provided, use those as entry (T+1 buy);
     otherwise use pick's price as entry (legacy daily mode).
-    Slippage: buy at buy_price * (1 + slippage), sell at sell_price * (1 - slippage).
-    Commission: deducted from round-trip.
+    Slippage: one-way on both buy and sell.
+    Commission: split half on buy, half on sell (total = commission_bps).
     """
     returns = []
+    slip = slippage_bps / 10000
+    comm_half = commission_bps / 20000  # half on each side
     for b in picks[:top_n]:
         if buy_prices:
             px_entry = buy_prices.get(b["code"])
@@ -222,10 +232,8 @@ def compute_avg_return(picks, sell_prices, top_n=10, buy_prices=None,
             px_entry = b.get("price")
         px_exit = sell_prices.get(b["code"])
         if px_entry and px_exit and px_entry > 0:
-            slip = slippage_bps / 10000
-            comm = commission_bps / 10000
-            actual_entry = px_entry * (1 + slip)
-            actual_exit = px_exit * (1 - slip - comm)
+            actual_entry = px_entry * (1 + slip + comm_half)
+            actual_exit = px_exit * (1 - slip - comm_half)
             returns.append((actual_exit - actual_entry) / actual_entry)
     if not returns:
         return None, 0
@@ -239,7 +247,6 @@ def dedup_equity(curve):
     seen = {}
     for i, pt in enumerate(curve):
         seen[pt["date"]] = i
-    # Rebuild keeping only last occurrence of each date
     last_indices = sorted(seen.values())
     return [curve[i] for i in last_indices]
 
@@ -254,7 +261,7 @@ def main():
     ap.add_argument("--rebalance", default="weekly", choices=["daily", "weekly"], help="rebalance frequency")
     ap.add_argument("--holding-days", type=int, default=5, help="holding period in trading days for weekly mode")
     ap.add_argument("--slippage-bps", type=int, default=SLIPPAGE_BPS, help="one-way slippage in bps")
-    ap.add_argument("--commission-bps", type=int, default=COMMISSION_BPS, help="round-trip commission in bps")
+    ap.add_argument("--commission-bps", type=int, default=COMMISSION_BPS, help="total commission in bps (split buy/sell)")
     args = ap.parse_args()
 
     if args.end_date:
@@ -269,11 +276,10 @@ def main():
     start_ymd = _yyyymmdd(start_dt)
     end_ymd = _yyyymmdd(end_dt)
     print(f"[backtest] {start_ymd} → {end_ymd}")
-    print(f"[costs] slippage={args.slippage_bps}bps one-way, commission={args.commission_bps}bps round-trip")
+    print(f"[costs] slippage={args.slippage_bps}bps one-way, commission={args.commission_bps}bps total (split buy/sell)")
 
     # 1. Get CB codes from DB (use all codes ever seen, not just current universe)
     con = connect()
-    # Try to get all historical codes from valuation_daily for survivorship-free universe
     try:
         rows = con.execute(
             "SELECT DISTINCT code FROM valuation_daily WHERE trade_date >= ? AND trade_date <= ?",
@@ -305,16 +311,17 @@ def main():
     total_px = sum(len(v) for v in prices.values())
     print(f"[prices] {total_px} price points for {len(prices)} bonds")
 
-    # 4. Fetch fundamentals per day (conv_prem, balance)
-    print(f"[fetch] pulling daily fundamentals...")
-    fundamentals = {}  # {date_ymd: {code: {conv_prem, balance}}}
+    # 4. Fetch fundamentals per day (conv_prem, balance, PE, vol)
+    print(f"[fetch] pulling daily fundamentals (conv_prem, balance, PE, vol)...")
+    fundamentals = {}  # {date_ymd: {code: {conv_prem, balance, pe_ttm, vol_20d}}}
     for td in trading_dates:
         fund = fetch_day_fundamentals(codes, td)
         fundamentals[td] = fund
-        print(f"  {td}: {len(fund)} bonds with conv_prem")
+        n_pe = sum(1 for v in fund.values() if v.get("pe_ttm") is not None)
+        n_vol = sum(1 for v in fund.values() if v.get("vol_20d") is not None)
+        print(f"  {td}: {len(fund)} conv_prem, {n_pe} PE, {n_vol} vol")
 
     # 5. Run backtest
-    # Build rebalance dates: weekly = every 5th trading day
     if args.rebalance == "weekly":
         holding = args.holding_days
         rebalance_indices = list(range(0, len(trading_dates) - holding, holding))
@@ -325,27 +332,21 @@ def main():
         rebalance_indices = list(range(len(trading_dates) - 1))
         holding = 1
 
-    # Use multiplicative equity curve (not additive)
+    # Multiplicative equity curve
     equity_dl = 1.0
     equity_sn = 1.0
     equity_mkt = 1.0
     results = []
-
-    # Track per-day equity for all dates (non-overlapping)
-    prev_rb_end = -1  # last date index already emitted
+    prev_rb_end = -1
 
     for rb_i in rebalance_indices:
-        # T day: select picks using T day's fundamentals
         td_select = trading_dates[rb_i]
-        # T+1 day: buy at open (use T+1 close as proxy)
         td_buy = trading_dates[min(rb_i + 1, len(trading_dates) - 1)]
-        # T+1+holding: sell
         td_sell = trading_dates[min(rb_i + 1 + holding, len(trading_dates) - 1)]
 
         fund = fundamentals.get(td_select, {})
 
-        # Build bond list for selection day — use bonds that have price data on that date
-        # This avoids survivorship bias: delisted/matured bonds are included if they traded
+        # Build bond list with all fields needed for strategy matching
         day_bonds = []
         for code in prices:
             px = prices[code].get(td_select)
@@ -357,6 +358,8 @@ def main():
                 "price": px,
                 "conv_prem": f.get("conv_prem"),
                 "balance": f.get("balance"),
+                "pe_ttm": f.get("pe_ttm"),
+                "vol_20d": f.get("vol_20d"),
             })
 
         # Strategy picks
@@ -379,49 +382,41 @@ def main():
 
         # Market return (with transaction costs)
         mkt_rets = []
+        slip = args.slippage_bps / 10000
+        comm_half = args.commission_bps / 20000
         for b in day_bonds:
             px_buy = buy_prices.get(b["code"])
             px_sell = sell_prices.get(b["code"])
             if px_buy and px_sell and px_buy > 0:
-                slip = args.slippage_bps / 10000
-                comm = args.commission_bps / 10000
-                actual_entry = px_buy * (1 + slip)
-                actual_exit = px_sell * (1 - slip - comm)
+                actual_entry = px_buy * (1 + slip + comm_half)
+                actual_exit = px_sell * (1 - slip - comm_half)
                 mkt_rets.append((actual_exit - actual_entry) / actual_entry)
         mkt_ret = sum(mkt_rets) / len(mkt_rets) if mkt_rets else 0
 
-        # Multiplicative compounding
+        # Multiplicative compounding with floor at 0
         if dl_ret is not None:
-            equity_dl *= (1 + dl_ret)
+            equity_dl = max(equity_dl * (1 + dl_ret), 0.0)
         if sn_ret is not None:
-            equity_sn *= (1 + sn_ret)
-        equity_mkt *= (1 + mkt_ret)
+            equity_sn = max(equity_sn * (1 + sn_ret), 0.0)
+        equity_mkt = max(equity_mkt * (1 + mkt_ret), 0.0)
 
-        # Emit equity curve points for this holding period
-        # Only emit dates not yet covered (non-overlapping)
+        # Emit equity curve points (non-overlapping)
         period_start = max(prev_rb_end + 1, rb_i)
         period_end = min(rb_i + 1 + holding, len(trading_dates))
 
-        # Snapshot equity at start of period
-        eq_start_dl = equity_dl / (1 + dl_ret) if dl_ret is not None and (1 + dl_ret) != 0 else equity_dl
-        eq_start_sn = equity_sn / (1 + sn_ret) if sn_ret is not None and (1 + sn_ret) != 0 else equity_sn
-        eq_start_mkt = equity_mkt / (1 + mkt_ret) if (1 + mkt_ret) != 0 else equity_mkt
+        # Recover start-of-period equity for interpolation
+        eq_start_dl = equity_dl / (1 + dl_ret) if dl_ret is not None and (1 + dl_ret) > 0 else equity_dl
+        eq_start_sn = equity_sn / (1 + sn_ret) if sn_ret is not None and (1 + sn_ret) > 0 else equity_sn
+        eq_start_mkt = equity_mkt / (1 + mkt_ret) if (1 + mkt_ret) > 0 else equity_mkt
 
         for d_i in range(period_start, period_end):
             frac = (d_i - rb_i) / max(holding, 1) if d_i > rb_i else 0
             frac = min(frac, 1.0)
-            # Log-space interpolation for multiplicative equity
-            import math
-            def interp_log(start, end, f):
-                if start <= 0 or end <= 0:
-                    return end
-                return start * math.exp(f * math.log(end / start))
-
             results.append({
                 "date": trading_dates[d_i],
-                "cum_dl": round(interp_log(eq_start_dl, equity_dl, frac) - 1, 6),
-                "cum_sn": round(interp_log(eq_start_sn, equity_sn, frac) - 1, 6),
-                "cum_mkt": round(interp_log(eq_start_mkt, equity_mkt, frac) - 1, 6),
+                "cum_dl": round(_interp_log(eq_start_dl, equity_dl, frac) - 1, 6),
+                "cum_sn": round(_interp_log(eq_start_sn, equity_sn, frac) - 1, 6),
+                "cum_mkt": round(_interp_log(eq_start_mkt, equity_mkt, frac) - 1, 6),
             })
 
         prev_rb_end = period_end - 1
@@ -442,9 +437,9 @@ def main():
 
     # Annualized: (equity)^(252/n_trading_days) - 1
     if n_trading_days > 0:
-        ann_dl = ((equity_dl) ** (252 / n_trading_days) - 1) * 100
-        ann_sn = ((equity_sn) ** (252 / n_trading_days) - 1) * 100
-        ann_mkt = ((equity_mkt) ** (252 / n_trading_days) - 1) * 100
+        ann_dl = ((max(equity_dl, 0.001)) ** (252 / n_trading_days) - 1) * 100
+        ann_sn = ((max(equity_sn, 0.001)) ** (252 / n_trading_days) - 1) * 100
+        ann_mkt = ((max(equity_mkt, 0.001)) ** (252 / n_trading_days) - 1) * 100
     else:
         ann_dl = ann_sn = ann_mkt = 0
 
@@ -455,6 +450,7 @@ def main():
     print(f"回测区间: {trading_dates[0]} → {trading_dates[-1]} ({n_trading_days} 个交易日)")
     print(f"调仓频率: {args.rebalance} (共{n_rebalances}次调仓, T日选券→T+1买入→持有{holding}日)")
     print(f"交易成本: 滑点{args.slippage_bps}bps(单边), 手续费{args.commission_bps}bps(往返)")
+    print(f"策略过滤: PE>0 + vol>Q1 (与实盘strategy_score一致)")
     print(f"{'='*70}")
     print(f"{'策略':<20} {'累计收益':>10} {'年化(复利)':>12}")
     print(f"{'-'*44}")

@@ -60,7 +60,7 @@ def _call_status(row):
     days = row.get("call_trigger_days")
     redemp_stop = row.get("redemp_stop_date") or ""
     if redemp_stop:
-        return f"强赎停牌{redemp_stop}"
+        return f"强赎停牌{_fmt_date(redemp_stop)}"
     if no_start and no_end:
         return f"不强赎至{_fmt_date(no_end)}"
     if isinstance(days, int) and days > 0:
@@ -247,7 +247,6 @@ def main():
             # Use theme-inferred 申万一级 + 同花顺行业 as 申万二级 substitute
             sw_l1 = row.get('industry', '')
             sw_l2 = row.get('ths_industry', '')
-            strat = strategy_map.get(row['code'])
             strat_label_parts = []
             for s in strategy_list:
                 if s["code"] == row['code']:

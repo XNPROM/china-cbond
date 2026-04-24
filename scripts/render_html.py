@@ -597,6 +597,7 @@ def search_blob(card, theme):
         theme, card["bond_name"], card["bond_code"], bond_code_short,
         card["stock"], stock_name, stock_code, stock_code_short,
         card["industry"], card["business"], " ".join(card["themes"]),
+        card.get("call_status", ""), card.get("down_status", ""),
     ]
     return html.escape(normalize_search_text(" ".join(parts)), quote=True)
 
