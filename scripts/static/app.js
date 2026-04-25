@@ -1,290 +1,667 @@
-/* ===== App: Filter, Sort, ECharts, Theme ===== */
 (function() {
   "use strict";
 
-  const DATA = window.__CBOND_DATA__ || [];
-  const BT = window.__BACKTEST__ || {};
+  const VIEW_MODEL = window.__VIEW_MODEL__ || {};
+  const EXPLORER = VIEW_MODEL.explorer || {};
+  const ITEMS = EXPLORER.items || [];
+  const ITEM_MAP = new Map(ITEMS.map(item => [item.bond_code, item]));
 
-  const state = { query: "", quick: "all", sortKey: null, sortDir: "none", theme: "" };
+  const state = {
+    query: "",
+    theme: "",
+    category: "",
+    quick: "all",
+    view: "cards",
+    sortKey: "relative_value",
+    sortDir: "asc",
+    selectedCode: null,
+  };
 
-  const $ = s => document.querySelector(s);
-  const $$ = s => [...document.querySelectorAll(s)];
+  const $ = selector => document.querySelector(selector);
+  const $$ = selector => Array.from(document.querySelectorAll(selector));
 
-  /* ---- Utils ---- */
-  function toNum(v) { const n = parseFloat(v || 0); return Number.isFinite(n) ? n : 0; }
-  function normQ(v) { return String(v||"").toLowerCase().replace(/[\s_\/()（）#`]+/g," ").replace(/\.(sh|sz|bj)\b/g,"").trim(); }
+  let radarChart = null;
+  let equityChart = null;
 
-  /* ---- Filter ---- */
-  function matchQuick(d) {
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function toNumber(metric) {
+    if (metric == null) return null;
+    if (typeof metric === "number") return Number.isFinite(metric) ? metric : null;
+    if (typeof metric === "object" && "value" in metric) return toNumber(metric.value);
+    const parsed = parseFloat(String(metric).replace("%", "").replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function metricText(metric) {
+    if (metric == null) return "--";
+    if (typeof metric === "object" && "text" in metric) return metric.text || "--";
+    return String(metric);
+  }
+
+  function signedClass(metric) {
+    const value = typeof metric === "object" ? metric.class_name : "";
+    if (value) return value;
+    const num = toNumber(metric);
+    if (num == null || num === 0) return "";
+    return num > 0 ? "is-positive" : "is-negative";
+  }
+
+  function stateClass(stateValue) {
+    if (stateValue === "undervalued" || stateValue === "safe") return "safe";
+    if (stateValue === "expensive" || stateValue === "danger") return "danger";
+    if (stateValue === "warn") return "warn";
+    return "note";
+  }
+
+  function sectorClass(sector) {
+    if (sector === "偏股") return "pill-equity";
+    if (sector === "平衡") return "pill-balanced";
+    if (sector === "偏债") return "pill-debt";
+    return "";
+  }
+
+  function matchesQuery(item) {
+    if (!state.query) return true;
+    return (item.search_text || "").includes(state.query);
+  }
+
+  function matchesTheme(item) {
+    return !state.theme || (item.themes || []).includes(state.theme);
+  }
+
+  function matchesCategory(item) {
+    return !state.category || item.category === state.category;
+  }
+
+  function matchesQuick(item) {
     if (state.quick === "all") return true;
-    const p = toNum(d.price), c = toNum(d.conv), v = toNum(d.vol);
-    if (state.quick === "highPrice") return p > 130;
-    if (state.quick === "lowPrice") return p < 100;
-    if (state.quick === "lowPremium") return c < 20;
-    if (state.quick === "midPremium") return c >= 20 && c < 50;
-    if (state.quick === "highPremium") return c >= 50;
+    if (state.quick === "undervalued") return toNumber(item.relative_value) != null && toNumber(item.relative_value) < 1.0;
+    if (state.quick === "lowPremium") return toNumber(item.conv) != null && toNumber(item.conv) < 20;
+    if (state.quick === "highDelta") return toNumber(item.delta) != null && toNumber(item.delta) >= 0.75;
+    if (state.quick === "callRisk") return ["warn", "danger"].includes((item.call_status || {}).state);
+    if (state.quick === "lowPrice") return toNumber(item.price) != null && toNumber(item.price) < 100;
     return true;
   }
-  function matchQuery(d) {
-    if (!state.query) return true;
-    return (d.search_text || "").includes(state.query);
-  }
-  function matchTheme(d) {
-    if (!state.theme) return true;
-    return (d.themes || []).includes(state.theme);
+
+  function comparableValue(item, key) {
+    if (key === "bond_name") return item.bond_name || "";
+    if (key === "theme_group") return item.theme_group || "";
+    return toNumber(item[key]);
   }
 
-  /* ---- Sort ---- */
   function sortItems(items) {
-    if (!state.sortKey || state.sortDir === "none") return items;
-    const dir = state.sortDir === "asc" ? 1 : -1;
-    return [...items].sort((a, b) => {
-      const va = toNum(a[state.sortKey]);
-      const vb = toNum(b[state.sortKey]);
-      return (va - vb) * dir;
+    const factor = state.sortDir === "desc" ? -1 : 1;
+    return [...items].sort((left, right) => {
+      const a = comparableValue(left, state.sortKey);
+      const b = comparableValue(right, state.sortKey);
+      if (typeof a === "string" || typeof b === "string") {
+        return String(a).localeCompare(String(b), "zh-CN") * factor;
+      }
+      if (a == null && b == null) return 0;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      if (a === b) return 0;
+      return (a - b) * factor;
     });
   }
 
-  /* ---- Render ---- */
-  function render() {
-    const filtered = DATA.filter(d => matchQuick(d) && matchQuery(d) && matchTheme(d));
-    const sorted = sortItems(filtered);
-    const visibleIdx = new Set(sorted.map(d => d.idx));
+  function filteredItems() {
+    const list = ITEMS.filter(item =>
+      matchesQuery(item) &&
+      matchesTheme(item) &&
+      matchesCategory(item) &&
+      matchesQuick(item)
+    );
+    return sortItems(list);
+  }
 
-    // Toggle row visibility
-    const rows = $$(".bond-row");
-    rows.forEach(row => {
-      const idx = parseInt(row.dataset.idx, 10);
-      row.hidden = !visibleIdx.has(idx);
+  function activeSummaryText() {
+    const parts = [];
+    if (state.quick !== "all") parts.push($(`.quick-chip[data-quick="${state.quick}"]`)?.textContent || state.quick);
+    if (state.theme) parts.push(state.theme);
+    if (state.category) parts.push(state.category);
+    if (state.query) parts.push(`搜索:${state.query}`);
+    return parts.length ? `· ${parts.join(" / ")}` : "· 全部标的";
+  }
+
+  function sparklineSvg(values, color) {
+    if (!Array.isArray(values) || values.length < 2) return "";
+    const width = 120;
+    const height = 42;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = Math.max(max - min, 1e-6);
+    const points = values.map((value, index) => {
+      const x = 6 + (index / (values.length - 1)) * (width - 12);
+      const y = 6 + (1 - ((value - min) / range)) * (height - 12);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
     });
+    return [
+      `<svg class="sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">`,
+      `<polyline points="${points.join(" ")}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>`,
+      `</svg>`,
+    ].join("");
+  }
 
-    // Toggle groups
-    $$(".group").forEach(g => {
-      const hasVis = [...g.querySelectorAll(".bond-row")].some(r => !r.hidden);
-      g.hidden = !hasVis;
-    });
+  function renderCard(item) {
+    return `
+      <article class="bond-card" data-open-code="${escapeHtml(item.bond_code)}">
+        <div class="bond-card-head">
+          <div>
+            <div class="bond-card-top">
+              <span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "未分域")}</span>
+              <span class="pill">${escapeHtml(item.theme_group)}</span>
+            </div>
+            <h3>${escapeHtml(item.bond_name)}</h3>
+            <p class="bond-card-sub">${escapeHtml(item.stock_name)} · ${escapeHtml(item.industry || "行业待补充")} · ${escapeHtml(item.bond_code)}</p>
+          </div>
+        </div>
+        <div class="bond-card-stats">
+          <div class="stat-box">
+            <span class="stat-label">价格</span>
+            <strong class="stat-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</strong>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">转股溢价</span>
+            <strong class="stat-value">${escapeHtml(metricText(item.conv))}</strong>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">相对价值</span>
+            <strong class="stat-value ${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</strong>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">Delta</span>
+            <strong class="stat-value">${escapeHtml(metricText(item.delta))}</strong>
+          </div>
+        </div>
+        <div class="bond-card-flags">
+          <span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "强赎状态未知")}</span>
+          ${item.down_status.text ? `<span class="status-pill ${stateClass(item.down_status.state)}">${escapeHtml(item.down_status.text)}</span>` : ""}
+          ${item.strategy ? `<span class="status-pill note">${escapeHtml(item.strategy)}</span>` : ""}
+        </div>
+        <div class="bond-card-tags">
+          ${(item.themes || []).slice(0, 4).map(theme => `<span class="theme-pill">${escapeHtml(theme)}</span>`).join("")}
+        </div>
+        <div class="bond-card-body">${escapeHtml(item.business || "暂无主营描述。")}</div>
+      </article>
+    `;
+  }
 
-    // Toggle category dividers
-    $$(".category-divider").forEach(div => {
-      const catName = div.querySelector("h2").textContent;
-      const catGroups = $$(`.group[data-category="${catName}"]`);
-      const hasVis = [...catGroups].some(g => !g.hidden);
-      div.hidden = !hasVis;
-    });
+  function renderTableRow(item) {
+    return `
+      <tr class="table-row" data-open-code="${escapeHtml(item.bond_code)}">
+        <td>
+          <strong>${escapeHtml(item.bond_name)}</strong>
+          <div class="table-meta">${escapeHtml(item.bond_code)} · ${escapeHtml(item.stock_name)}</div>
+        </td>
+        <td><span class="table-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</span></td>
+        <td><span class="table-value">${escapeHtml(metricText(item.conv))}</span></td>
+        <td><span class="table-value ${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</span></td>
+        <td><span class="table-value">${escapeHtml(metricText(item.delta))}</span></td>
+        <td><span class="table-value">${escapeHtml(metricText(item.balance))}</span></td>
+        <td>${escapeHtml(item.theme_group)}</td>
+        <td>
+          <div class="bond-card-flags">
+            <span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "无")}</span>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
 
-    // Update count
+  function renderCards(items) {
+    const view = $("#cardsView");
+    if (!view) return;
+    view.hidden = state.view !== "cards";
+    if (state.view !== "cards") return;
+    view.innerHTML = items.map(renderCard).join("");
+  }
+
+  function renderTable(items) {
+    const container = $("#tableView");
+    const tbody = $("#tableBody");
+    if (!container || !tbody) return;
+    container.hidden = state.view !== "table";
+    if (state.view !== "table") return;
+    tbody.innerHTML = items.map(renderTableRow).join("");
+  }
+
+  function renderExplorer(items) {
+    renderCards(items);
+    renderTable(items);
+    const empty = $("#emptyState");
+    if (empty) empty.hidden = items.length > 0;
+  }
+
+  function updateSummary(items) {
     const countEl = $("#resultCount");
-    if (countEl) countEl.textContent = String(sorted.length);
-    const emptyEl = $("#empty");
-    if (emptyEl) emptyEl.style.display = sorted.length ? "none" : "block";
+    const summaryEl = $("#activeSummary");
+    if (countEl) countEl.textContent = String(items.length);
+    if (summaryEl) summaryEl.textContent = activeSummaryText();
   }
 
-  /* ---- Column Sort ---- */
-  function initColumnSort() {
-    $$(".btable th[data-sort-key]").forEach(th => {
-      th.addEventListener("click", () => {
-        const key = th.dataset.sortKey;
-        if (state.sortKey === key) {
-          state.sortDir = state.sortDir === "none" ? "asc" : state.sortDir === "asc" ? "desc" : "none";
-          if (state.sortDir === "none") state.sortKey = null;
-        } else {
-          state.sortKey = key;
-          state.sortDir = "asc";
-        }
-        // Update sort indicators
-        $$(".btable th").forEach(h => {
-          h.classList.remove("sort-active");
-          const icon = h.querySelector(".sort-icon");
-          if (icon) icon.textContent = "";
-        });
-        if (state.sortKey) {
-          // Add icons to all headers with same sort key
-          $$(`.btable th[data-sort-key="${state.sortKey}"]`).forEach(h => {
-            h.classList.add("sort-active");
-            const icon = h.querySelector(".sort-icon");
-            if (icon) icon.textContent = state.sortDir === "asc" ? "▲" : "▼";
-          });
-        }
-        render();
-      });
-    });
+  function detailHtml(item) {
+    return `
+      <div class="drawer-top">
+        <div>
+          <div class="bond-card-top">
+            <span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "未分域")}</span>
+            <span class="pill">${escapeHtml(item.theme_group)}</span>
+          </div>
+          <h2 class="drawer-title">${escapeHtml(item.detail.bond_name)}</h2>
+          <p class="drawer-subtitle">${escapeHtml(item.detail.stock_name)} · ${escapeHtml(item.detail.stock_code)} · ${escapeHtml(item.detail.industry || "行业待补充")}</p>
+          <p class="drawer-copy">${escapeHtml(item.detail.business || "暂无主营描述。")}</p>
+        </div>
+      </div>
+      <div class="drawer-stat-grid">
+        <div class="drawer-stat">
+          <span class="drawer-stat-label">价格</span>
+          <strong class="drawer-stat-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</strong>
+        </div>
+        <div class="drawer-stat">
+          <span class="drawer-stat-label">转股溢价</span>
+          <strong class="drawer-stat-value">${escapeHtml(metricText(item.conv))}</strong>
+        </div>
+        <div class="drawer-stat">
+          <span class="drawer-stat-label">相对价值</span>
+          <strong class="drawer-stat-value ${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</strong>
+        </div>
+        <div class="drawer-stat">
+          <span class="drawer-stat-label">Delta</span>
+          <strong class="drawer-stat-value">${escapeHtml(metricText(item.delta))}</strong>
+        </div>
+        <div class="drawer-stat">
+          <span class="drawer-stat-label">余额(亿)</span>
+          <strong class="drawer-stat-value">${escapeHtml(metricText(item.balance))}</strong>
+        </div>
+        <div class="drawer-stat">
+          <span class="drawer-stat-label">纯债 YTM</span>
+          <strong class="drawer-stat-value">${escapeHtml(metricText(item.pure_bond_ytm))}</strong>
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-head">
+          <h4>状态与策略</h4>
+        </div>
+        <div class="bond-card-flags">
+          <span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "强赎状态未知")}</span>
+          ${item.down_status.text ? `<span class="status-pill ${stateClass(item.down_status.state)}">${escapeHtml(item.down_status.text)}</span>` : ""}
+          ${item.detail.strategy ? `<span class="status-pill note">${escapeHtml(item.detail.strategy)}</span>` : ""}
+          ${item.rating ? `<span class="status-pill note">${escapeHtml(item.rating)}</span>` : ""}
+          ${item.maturity ? `<span class="status-pill note">到期 ${escapeHtml(item.maturity)}</span>` : ""}
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-head">
+          <h4>题材</h4>
+        </div>
+        <div class="bond-card-tags">
+          ${(item.detail.themes || []).map(theme => `<span class="theme-pill">${escapeHtml(theme)}</span>`).join("")}
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-head">
+          <h4>时序片段</h4>
+        </div>
+        <div class="trend-row">
+          <div class="trend-card">
+            <strong>Delta</strong>
+            ${sparklineSvg(item.trend.delta, "#1d4ed8")}
+          </div>
+          <div class="trend-card">
+            <strong>相对价值</strong>
+            ${sparklineSvg(item.trend.rv, "#1d7a46")}
+          </div>
+        </div>
+      </div>
+    `;
   }
 
-  /* ---- Theme Toggle ---- */
-  function initTheme() {
-    const saved = localStorage.getItem("cbond-theme") || "dark";
-    document.documentElement.setAttribute("data-theme", saved);
-    updateThemeIcon(saved);
-  }
-  function updateThemeIcon(theme) {
-    const btn = $("#themeToggle");
-    if (btn) btn.textContent = theme === "dark" ? "🌙" : "☀️";
-  }
-  function toggleTheme() {
-    const html = document.documentElement;
-    const next = html.getAttribute("data-theme") === "dark" ? "light" : "dark";
-    html.setAttribute("data-theme", next);
-    localStorage.setItem("cbond-theme", next);
-    updateThemeIcon(next);
-    renderCharts();
+  function openDetail(code) {
+    const item = ITEM_MAP.get(code);
+    if (!item) return;
+    state.selectedCode = code;
+    const content = $("#detailContent");
+    const drawer = $("#detailDrawer");
+    const scrim = $("#drawerScrim");
+    if (content) content.innerHTML = detailHtml(item);
+    if (drawer) {
+      drawer.classList.add("is-open");
+      drawer.setAttribute("aria-hidden", "false");
+    }
+    if (scrim) scrim.hidden = false;
   }
 
-  /* ---- ECharts: Equity Curve ---- */
-  let equityChart = null;
-  function initEquityCurve() {
-    const el = $("#equity-chart");
-    if (!el || !BT.equity_curve || BT.equity_curve.length < 2) return;
+  function closeDetail() {
+    state.selectedCode = null;
+    const drawer = $("#detailDrawer");
+    const scrim = $("#drawerScrim");
+    if (drawer) {
+      drawer.classList.remove("is-open");
+      drawer.setAttribute("aria-hidden", "true");
+    }
+    if (scrim) scrim.hidden = true;
+  }
+
+  function renderRadar(items) {
+    const el = $("#marketRadarChart");
+    if (!el) return;
     if (typeof echarts === "undefined") {
-      el.innerHTML = '<div style="padding:20px;color:var(--text-muted);text-align:center">图表加载需要网络连接</div>';
+      el.innerHTML = '<div class="empty-state"><h3>图表加载失败</h3><p>当前环境无法加载 ECharts。</p></div>';
       return;
     }
-    equityChart = echarts.init(el, null, { renderer: "canvas" });
-    renderEquityCurve();
-    window.addEventListener("resize", () => equityChart && equityChart.resize());
-  }
-  function renderEquityCurve() {
-    if (!equityChart) return;
-    const curve = dedupEquity(BT.equity_curve || []);
-    if (curve.length < 2) return;
+    if (!radarChart) {
+      radarChart = echarts.init(el, null, { renderer: "canvas" });
+      radarChart.on("click", params => {
+        if (params.data && params.data.bondCode) openDetail(params.data.bondCode);
+      });
+      window.addEventListener("resize", () => radarChart && radarChart.resize());
+    }
 
-    const style = getComputedStyle(document.documentElement);
-    const textMuted = style.getPropertyValue("--text-muted").trim() || "#6b7280";
-    const border = style.getPropertyValue("--border").trim() || "#2d3140";
-    const accent = style.getPropertyValue("--accent").trim() || "#3b82f6";
-    const gold = style.getPropertyValue("--gold").trim() || "#eab308";
+    const groups = {
+      undervalued: [],
+      fair: [],
+      expensive: [],
+    };
+    items.forEach(item => {
+      const bucket = item.relative_value.state === "undervalued"
+        ? "undervalued"
+        : item.relative_value.state === "expensive"
+          ? "expensive"
+          : "fair";
+      groups[bucket].push({
+        value: [
+          toNumber(item.conv) || 0,
+          toNumber(item.price) || 0,
+          Math.max(14, Math.min(38, (toNumber(item.balance) || 0) * 1.7)),
+          toNumber(item.relative_value) || 0,
+        ],
+        bondCode: item.bond_code,
+        bondName: item.bond_name,
+        themeGroup: item.theme_group,
+        sector: item.sector,
+        priceText: metricText(item.price),
+        convText: metricText(item.conv),
+        rvText: metricText(item.relative_value),
+        deltaText: metricText(item.delta),
+      });
+    });
 
-    const dates = curve.map(p => p.date);
-    equityChart.setOption({
-      backgroundColor: "transparent",
-      grid: { left: 60, right: 50, top: 50, bottom: 55 },
+    radarChart.setOption({
+      animationDuration: 300,
+      grid: { left: 52, right: 22, top: 36, bottom: 42 },
+      tooltip: {
+        trigger: "item",
+        backgroundColor: "rgba(255,255,255,0.96)",
+        borderColor: "rgba(139,124,94,0.18)",
+        borderWidth: 1,
+        textStyle: { color: "#1f2937" },
+        formatter: params => {
+          const data = params.data;
+          return [
+            `<strong>${escapeHtml(data.bondName)}</strong>`,
+            `${escapeHtml(data.themeGroup)} · ${escapeHtml(data.sector || "未分域")}`,
+            `价格 ${escapeHtml(data.priceText)} / 转股溢价 ${escapeHtml(data.convText)}`,
+            `RV ${escapeHtml(data.rvText)} / Delta ${escapeHtml(data.deltaText)}`,
+          ].join("<br>");
+        },
+      },
       xAxis: {
-        type: "category", data: dates, boundaryGap: false,
-        axisLabel: { color: textMuted, fontSize: 10, formatter: v => v.slice(4) },
-        axisLine: { lineStyle: { color: border } },
-        axisTick: { show: false },
+        type: "value",
+        name: "转股溢价率(%)",
+        nameTextStyle: { color: "#536072" },
+        axisLabel: { color: "#536072" },
+        splitLine: { lineStyle: { color: "rgba(139,124,94,0.14)" } },
       },
       yAxis: {
         type: "value",
-        axisLabel: { color: textMuted, fontSize: 10, formatter: v => (v * 100).toFixed(1) + "%" },
-        axisLine: { show: false },
-        splitLine: { lineStyle: { color: border, type: "dashed" } },
+        name: "价格",
+        nameTextStyle: { color: "#536072" },
+        axisLabel: { color: "#536072" },
+        splitLine: { lineStyle: { color: "rgba(139,124,94,0.14)" } },
       },
-      tooltip: {
-        trigger: "axis",
-        backgroundColor: "rgba(0,0,0,.8)", borderWidth: 0,
-        textStyle: { color: "#e4e4e7", fontSize: 12 },
-        valueFormatter: v => v != null ? (v * 100).toFixed(2) + "%" : "--",
-      },
-      legend: {
-        top: 5, textStyle: { color: textMuted, fontSize: 11 },
-        data: ["双低Top10", "分域双低Top10", "全市场等权"],
-      },
-      dataZoom: [{ type: "inside" }, { type: "slider", height: 20, bottom: 5, borderColor: border, fillerColor: "rgba(59,130,246,.15)", handleStyle: { color: accent } }],
       series: [
-        { name: "双低Top10", type: "line", data: curve.map(p => p.cum_dl), smooth: true, symbol: "none", lineStyle: { width: 2, color: accent }, itemStyle: { color: accent }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(59,130,246,.15)" }, { offset: 1, color: "rgba(59,130,246,.01)" }] } } },
-        { name: "分域双低Top10", type: "line", data: curve.map(p => p.cum_sn), smooth: true, symbol: "none", lineStyle: { width: 2, color: gold }, itemStyle: { color: gold } },
-        { name: "全市场等权", type: "line", data: curve.map(p => p.cum_mkt), smooth: true, symbol: "none", lineStyle: { width: 1.5, type: "dashed", color: textMuted }, itemStyle: { color: textMuted } },
+        {
+          name: "低估",
+          type: "scatter",
+          data: groups.undervalued,
+          symbolSize: value => value[2],
+          itemStyle: { color: "#1d7a46", opacity: 0.86 },
+        },
+        {
+          name: "合理",
+          type: "scatter",
+          data: groups.fair,
+          symbolSize: value => value[2],
+          itemStyle: { color: "#4b5563", opacity: 0.74 },
+        },
+        {
+          name: "偏贵",
+          type: "scatter",
+          data: groups.expensive,
+          symbolSize: value => value[2],
+          itemStyle: { color: "#c2410c", opacity: 0.8 },
+        },
       ],
-    }, true);
-  }
-  function dedupEquity(curve) {
-    const seen = {};
-    for (let i = 0; i < curve.length; i++) seen[curve[i].date] = i;
-    return Object.values(seen).sort((a, b) => a - b).map(i => curve[i]);
-  }
-
-  function renderCharts() {
-    renderEquityCurve();
-  }
-
-  /* ---- Group Collapse ---- */
-  function initGroupToggle() {
-    $$(".group-head").forEach(h => {
-      h.addEventListener("click", e => {
-        if (e.target.closest("th")) return; // don't toggle on sort clicks
-        const body = h.nextElementSibling;
-        body.classList.toggle("collapsed");
-        const toggle = h.querySelector(".toggle");
-        if (toggle) toggle.textContent = body.classList.contains("collapsed") ? "展开" : "收起";
-      });
     });
   }
 
-  /* ---- Copy / Export ---- */
-  function initCopyExport() {
-    const copyBtn = $("#copyCodes");
-    const exportBtn = $("#exportCsv");
-    const statusEl = $("#exportStatus");
-
-    function getVisibleItems() {
-      const visibleRows = $$(".bond-row").filter(r => !r.hidden);
-      return visibleRows.map(r => {
-        const idx = parseInt(r.dataset.idx, 10);
-        return DATA.find(d => d.idx === idx);
-      }).filter(Boolean);
+  function renderBacktest() {
+    const chartEl = $("#equityChart");
+    const payload = VIEW_MODEL.backtest;
+    if (!chartEl || !payload || !payload.equity_curve || payload.equity_curve.length < 2) return;
+    if (typeof echarts === "undefined") return;
+    if (!equityChart) {
+      equityChart = echarts.init(chartEl, null, { renderer: "canvas" });
+      window.addEventListener("resize", () => equityChart && equityChart.resize());
     }
+    const curve = payload.equity_curve;
+    equityChart.setOption({
+      grid: { left: 52, right: 24, top: 30, bottom: 36 },
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: "rgba(255,255,255,0.96)",
+        borderColor: "rgba(139,124,94,0.18)",
+        borderWidth: 1,
+        textStyle: { color: "#1f2937" },
+        valueFormatter: value => `${(value * 100).toFixed(2)}%`,
+      },
+      legend: {
+        top: 0,
+        textStyle: { color: "#536072" },
+      },
+      xAxis: {
+        type: "category",
+        data: curve.map(point => point.date),
+        axisLabel: { color: "#536072" },
+        axisLine: { lineStyle: { color: "rgba(139,124,94,0.2)" } },
+      },
+      yAxis: {
+        type: "value",
+        axisLabel: { color: "#536072", formatter: value => `${(value * 100).toFixed(1)}%` },
+        splitLine: { lineStyle: { color: "rgba(139,124,94,0.14)" } },
+      },
+      series: [
+        {
+          name: "双低 Top10",
+          type: "line",
+          smooth: true,
+          symbol: "none",
+          lineStyle: { width: 3, color: "#1d4ed8" },
+          areaStyle: { color: "rgba(29,78,216,0.10)" },
+          data: curve.map(point => point.cum_dl),
+        },
+        {
+          name: "分域双低 Top10",
+          type: "line",
+          smooth: true,
+          symbol: "none",
+          lineStyle: { width: 2.5, color: "#a16207" },
+          data: curve.map(point => point.cum_sn),
+        },
+        {
+          name: "全市场等权",
+          type: "line",
+          smooth: true,
+          symbol: "none",
+          lineStyle: { width: 2, type: "dashed", color: "#6b7280" },
+          data: curve.map(point => point.cum_mkt),
+        },
+      ],
+    });
+  }
 
-    if (copyBtn) {
-      copyBtn.addEventListener("click", async () => {
-        const items = getVisibleItems();
-        const codes = items.map(d => d.bond_code).filter(Boolean);
-        if (!codes.length) return;
-        try {
-          await navigator.clipboard.writeText(codes.join("\n"));
-          if (statusEl) { statusEl.textContent = "已复制 " + codes.length + " 个代码"; setTimeout(() => statusEl.textContent = "", 2000); }
-        } catch (_) {
-          if (statusEl) { statusEl.textContent = "复制失败"; setTimeout(() => statusEl.textContent = "", 2000); }
-        }
-      });
+  function setSort(key) {
+    if (state.sortKey === key) {
+      state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+    } else {
+      state.sortKey = key;
+      state.sortDir = "asc";
     }
+    $$(".bond-table th[data-sort-key]").forEach(th => {
+      th.classList.toggle("is-sorted", th.dataset.sortKey === state.sortKey);
+    });
+    render();
+  }
 
-    if (exportBtn) {
-      exportBtn.addEventListener("click", () => {
-        const items = getVisibleItems();
-        if (!items.length) return;
-        const esc = v => { const s = String(v||""); return s.includes(",")||s.includes('"')||s.includes("\n") ? '"'+s.replace(/"/g,'""')+'"' : s; };
-        const h = "bond_code,bond_name,stock_code,stock_name,price,day_chg,conv_prem,pure_prem,vol,pure_bond_ytm,relative_value,delta,balance,rating,maturity,strategy";
-        const rows = items.map(d => [d.bond_code,d.bond_name,d.stock_code,d.stock_name,d.price,d.day_chg,d.conv,d.pure,d.vol,d.pure_bond_ytm,d.relative_value,d.delta,d.balance,d.rating,d.maturity,d.strategy].map(esc).join(","));
-        const blob = new Blob(["﻿"+h+"\n"+rows.join("\n")], {type:"text/csv;charset=utf-8;"});
-        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "cbond_"+Date.now()+".csv";
-        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
-        if (statusEl) { statusEl.textContent = "已导出 " + items.length + " 条"; setTimeout(() => statusEl.textContent = "", 2000); }
-      });
+  function render() {
+    const items = filteredItems();
+    renderExplorer(items);
+    updateSummary(items);
+    renderRadar(items.length ? items : ITEMS);
+  }
+
+  function visibleItems() {
+    return filteredItems();
+  }
+
+  function exportCsv() {
+    const items = visibleItems();
+    if (!items.length) return;
+    const header = [
+      "bond_code", "bond_name", "stock_code", "stock_name", "price", "day_chg",
+      "conv_prem", "relative_value", "delta", "balance", "theme_group", "industry",
+    ];
+    const lines = items.map(item => [
+      item.bond_code,
+      item.bond_name,
+      item.stock_code,
+      item.stock_name,
+      metricText(item.price),
+      metricText(item.day_chg),
+      metricText(item.conv),
+      metricText(item.relative_value),
+      metricText(item.delta),
+      metricText(item.balance),
+      item.theme_group,
+      item.industry,
+    ].map(value => {
+      const text = String(value ?? "");
+      return /[,"\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }).join(","));
+    const blob = new Blob([`\ufeff${header.join(",")}\n${lines.join("\n")}`], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `cbond_${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    const status = $("#exportStatus");
+    if (status) {
+      status.textContent = `已导出 ${items.length} 条`;
+      window.setTimeout(() => { status.textContent = ""; }, 2000);
     }
   }
 
-  /* ---- Controls ---- */
-  function initControls() {
-    const searchInput = $("#search");
-    const themeSelect = $("#themeFilter");
-    const quickButtons = $$("[data-quick]");
+  async function copyCodes() {
+    const codes = visibleItems().map(item => item.bond_code).filter(Boolean);
+    if (!codes.length) return;
+    const status = $("#exportStatus");
+    try {
+      await navigator.clipboard.writeText(codes.join("\n"));
+      if (status) {
+        status.textContent = `已复制 ${codes.length} 个代码`;
+        window.setTimeout(() => { status.textContent = ""; }, 2000);
+      }
+    } catch (error) {
+      if (status) {
+        status.textContent = "复制失败";
+        window.setTimeout(() => { status.textContent = ""; }, 2000);
+      }
+    }
+  }
 
-    if (searchInput) {
-      searchInput.addEventListener("input", e => { state.query = normQ(e.target.value); render(); });
-    }
-    if (themeSelect) {
-      themeSelect.addEventListener("change", e => { state.theme = e.target.value; render(); });
-    }
-    quickButtons.forEach(btn => {
-      btn.addEventListener("click", () => {
-        state.quick = btn.dataset.quick;
-        quickButtons.forEach(b => b.classList.toggle("is-active", b === btn));
+  function initControls() {
+    $("#searchInput")?.addEventListener("input", event => {
+      state.query = String(event.target.value || "")
+        .toLowerCase()
+        .replace(/\.(sh|sz|bj)\b/g, "")
+        .trim();
+      render();
+    });
+
+    $("#themeFilter")?.addEventListener("change", event => {
+      state.theme = event.target.value;
+      render();
+    });
+
+    $("#categoryFilter")?.addEventListener("change", event => {
+      state.category = event.target.value;
+      render();
+    });
+
+    $$(".quick-chip").forEach(button => {
+      button.addEventListener("click", () => {
+        state.quick = button.dataset.quick || "all";
+        $$(".quick-chip").forEach(node => node.classList.toggle("is-active", node === button));
         render();
       });
     });
+
+    $$(".view-btn").forEach(button => {
+      button.addEventListener("click", () => {
+        state.view = button.dataset.view || "cards";
+        $$(".view-btn").forEach(node => node.classList.toggle("is-active", node === button));
+        render();
+      });
+    });
+
+    $("#copyCodes")?.addEventListener("click", copyCodes);
+    $("#exportCsv")?.addEventListener("click", exportCsv);
+    $("#detailClose")?.addEventListener("click", closeDetail);
+    $("#drawerScrim")?.addEventListener("click", closeDetail);
+
+    document.addEventListener("click", event => {
+      const openTarget = event.target.closest("[data-open-code]");
+      if (openTarget) {
+        openDetail(openTarget.dataset.openCode);
+      }
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") closeDetail();
+    });
+
+    $$(".bond-table th[data-sort-key]").forEach(th => {
+      th.addEventListener("click", () => setSort(th.dataset.sortKey));
+    });
+    $$(".bond-table th[data-sort-key]").forEach(th => {
+      th.classList.toggle("is-sorted", th.dataset.sortKey === state.sortKey);
+    });
   }
 
-  /* ---- Init ---- */
   document.addEventListener("DOMContentLoaded", () => {
-    initTheme();
     initControls();
-    initColumnSort();
-    initGroupToggle();
-    initCopyExport();
-    initEquityCurve();
+    renderBacktest();
     render();
   });
-
-  const themeBtn = $("#themeToggle");
-  if (themeBtn) themeBtn.addEventListener("click", toggleTheme);
 })();

@@ -145,7 +145,7 @@ def parse_card(lines, start_idx):
         "bond_name": bond_name,
         "bond_code": bond_code,
         "stock": metrics.get("正股", ""),
-        "industry": metrics.get("行业", ""),
+        "industry": metrics.get("申万一级", metrics.get("行业", "")),
         "price": metrics.get("价格", ""),
         "day_chg": metrics.get("涨跌幅", ""),
         "conv": metrics.get("转股溢价率", ""),

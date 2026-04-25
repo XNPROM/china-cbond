@@ -1,6 +1,6 @@
 # China CBond Monitor — 可转债全景扫描
 
-全市场可转债（~335只）全景扫描系统。每日自动抓取行情、计算 BS 定价与希腊字母、运行多策略选券、按题材分组，生成一份交互式 HTML 报告并通过 GitHub Pages 发布。
+全市场可转债（~335只）全景扫描系统。每日自动抓取行情、计算 BS 定价与希腊字母、运行多策略选券、按题材分组，生成一份浅色研究工作台风格的交互式 HTML 报告并通过 GitHub Pages 发布。
 
 ## 报告预览
 
@@ -55,31 +55,26 @@ python scripts/bs_pricing.py \
     --dataset    data/raw/asof=$ASOF/dataset.json \
     --trade-date $ASOF
 
-# Step 5: 重新组装以包含 BS 定价结果
-python scripts/assemble_dataset.py \
-    --trade-date $ASOF \
-    --out data/raw/asof=$ASOF/dataset.json
-
-# Step 6: 策略评分 (即时)
+# Step 5: 策略评分 (即时)
 python scripts/strategy_score.py \
     --dataset    data/raw/asof=$ASOF/dataset.json \
     --trade-date $ASOF \
     --out        data/raw/asof=$ASOF/strategy_picks.jsonl
 
-# Step 7: 题材分类 (即时)
+# Step 6: 题材分类 (即时)
 python scripts/generate_themes_direct.py \
     --dataset data/raw/asof=$ASOF/dataset.json \
     --out     data/raw/asof=$ASOF/themes.jsonl \
     --trade-date $ASOF
 
-# Step 8: 生成 Markdown (即时)
+# Step 7: 生成 Markdown (即时)
 python scripts/build_overview_md.py \
     --dataset    data/raw/asof=$ASOF/dataset.json \
     --trade-date $ASOF \
     --out        reports/$ASOF/cbond_overview.md \
     --title-date $ASOF
 
-# Step 9: 渲染 HTML (即时)
+# Step 8: 渲染 HTML (即时)
 python scripts/render_html.py \
     --in         reports/$ASOF/cbond_overview.md \
     --out        reports/$ASOF/cbond_overview.html \
@@ -97,16 +92,10 @@ python scripts/init_db.py
 python scripts/backfill.py --raw data/raw/asof=2026-04-20 --trade-date 2026-04-20
 ```
 
-### 全量发现（慢，~2-3min；日常刷新跳过）
+### 全量可转债抓取（~30s）
 
 ```bash
-python scripts/discover_universe.py \
-    --seed /path/to/ifind_cbond_seed_codes.txt \
-    --asof $ASOF \
-    --probe \
-    --out-json data/raw/asof=$ASOF/cbond_universe.json \
-    --out-csv  data/raw/asof=$ASOF/cbond_universe.csv \
-    --out-codes data/raw/asof=$ASOF/cbond_codes.txt
+python scripts/fetch_cb_universe.py --date 20260424
 ```
 
 ## 脚本说明
@@ -300,15 +289,14 @@ BS 看涨期权价值 = S·N(d1) - K·e^(-rT)·N(d2)
 
 ## HTML 报告功能
 
-- **题材分组**：按大类（科技TMT、新能源电力、高端制造等）聚合，每组可折叠
-- **分域标签**：每只券显示偏股/平衡/偏债徽章
-- **快速筛选**：偏股(<20%)、平衡(20-50%)、偏债(≥50%)、价格>130、价格<100、高/低波动率
-- **排序**：价格、溢价率、涨跌幅、波动率、余额
-- **搜索**：转债名、正股名、代码、题材、主营
-- **相对价值着色**：绿色 (<1.0 低估)、红色 (>1.2 高估)
-- **Delta 列**：显示正股敏感度
-- **策略推荐**：分卡片展示各策略 Top 选券
-- **导出**：复制代码 / 导出可见券种为 CSV
+- **浅色研究面板**：改为浅底、纸面感、信息分区明确的工作台式布局，不再使用黑底后台风格
+- **市场雷达**：首屏散点图同时展示价格、转股溢价、相对价值和余额，支持点选标的
+- **策略观察区**：双低、分域双低、低估榜单以卡片化策略面板呈现
+- **双视图工作台**：支持卡片视图 / 数据表切换，适合不同浏览习惯
+- **详情抽屉**：点击标的可直接查看主营、题材、状态、关键指标和时序片段
+- **快速筛选**：低估、低溢价、高 Delta、强赎触发、百元以下等快捷筛选
+- **搜索与排序**：支持转债名、正股名、代码、题材、主营搜索，并支持核心字段排序
+- **导出能力**：复制当前过滤结果代码，或导出当前可见券种为 CSV
 
 ## GitHub Pages 自动部署
 
@@ -324,7 +312,7 @@ BS 看涨期权价值 = S·N(d1) - K·e^(-rT)·N(d2)
 | 目录 | `data/raw/asof=YYYY-MM-DD/` 存原始快照，`reports/YYYY-MM-DD/` 存输出 |
 | 单位 | 余额=亿元，价格=元，溢价率/波动率/YTM=%，相对价值=无量纲 |
 | 双写 | 所有 fetch 脚本同时写 CSV/JSON 扁平文件 **和** DuckDB |
-| assemble | `assemble_dataset.py` 必须跑两次（bs_pricing 前后各一次） |
+| assemble | `bs_pricing.py` 会把 BS 字段回写到 `dataset.json`，日常流程无需再次 `assemble` |
 
 ## 已知限制
 
