@@ -31,3 +31,4 @@ _temp_research/
 .env
 *.token
 ifindfunction.docx
+.playwright-mcp/

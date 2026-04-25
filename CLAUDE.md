@@ -55,7 +55,7 @@ python3 scripts/build_overview_md.py \
     --out        reports/$ASOF/cbond_overview.md \
     --title-date $ASOF
 
-# 8. Render HTML (instant; local only, no LLM)
+# 8. Render HTML (instant; local only, no LLM; requires jinja2)
 python3 scripts/render_html.py \
     --in         reports/$ASOF/cbond_overview.md \
     --out        reports/$ASOF/cbond_overview.html \
@@ -143,7 +143,8 @@ iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
 | `strategy_score.py` | Double-low + sector-neutral + low-RV scoring |
 | `generate_themes_direct.py` | Keyword + Shenwan theme classification |
 | `build_overview_md.py` | Markdown report from dataset + DB |
-| `render_html.py` | Interactive HTML with filter/sort/equity curve |
+| `render_html.py` | Interactive HTML dashboard (Jinja2 + ECharts) |
+| `render_markdown_parser.py` | Markdown parser + helpers (extracted from render_html) |
 | `backtest_weekly.py` | Weekly-rebalanced backtest engine |
 | `backfill.py` | One-shot raw data loader into DuckDB |
 | `init_db.py` | Idempotent schema initializer |
@@ -178,22 +179,26 @@ Indexes: `idx_val_code_date`, `idx_strat_date_strat`, `idx_vol_ucode_date`.
 
 ### HTML Report
 
-`render_html.py` — interactive HTML with:
-- Sort/filter (price, premium, volatility, daily change)
+`render_html.py` — modern dark-themed interactive dashboard:
+- Jinja2 templates (`scripts/templates/base.html.j2`) + inlined CSS/JS
+- Dark/light theme toggle (persisted to localStorage)
+- KPI summary cards (total, avg price, median conv premium, median RV, undervalued count, sector split)
+- Column-level sorting (click header: asc → desc → default)
+- ECharts equity curve (tooltip + dataZoom)
+- SVG sparklines for delta and relative value trends
+- Filter: text search, theme dropdown, quick-filter buttons
 - Export CSV / copy codes
-- Sector badge (偏股/平衡/偏债) per bond
-- Relative value color coding (green <1.0, red >1.2)
-- BS Delta + sparkline charts
-- 强赎/下修 status columns with color badges
-- Backtest equity curve SVG chart
-- Mobile-responsive
+- Sector badges, relative value color coding, call/down status badges
+- Mobile-responsive (card layout <640px)
+
+Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in `scripts/static/style.css`, JS in `scripts/static/app.js`, both inlined at render time. Bond data in `window.__CBOND_DATA__` JSON (replaces data-* attributes).
 
 ## Key Conventions
 
 - **Directory layout**: `data/raw/asof=YYYY-MM-DD/` for raw snapshots, `reports/YYYY-MM-DD/` for output.
 - **All fetch scripts write both flat files AND upsert to DuckDB** — flat files for inspection, DB for SQL JOINs.
 - **Units**: balance in 亿元, price in 元, premium rates as percent (×100), volatility as annualized percent (×100).
-- **Python**: stdlib + `duckdb` only. No pandas/numpy. Python 3.9+.
+- **Python**: stdlib + `duckdb` + `jinja2` only. No pandas/numpy. Python 3.9+.
 - **BS pricing** uses risk-free rate 2.5% (not YTM). Writes BS fields back into dataset.json in-place.
 - **Backtest** uses multiplicative compounding with configurable slippage (10bps one-way) and commission (2bps total, split buy/sell).
 - **`init_schema()`** runs once per session on first `connect()` call, not per script invocation.

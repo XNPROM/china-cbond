@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title | e }}</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>{{ css | safe }}</style>
+</head>
+<body>
+
+<header>
+  <div class="header-row">
+    <div>
+      <h1>{{ report.title or title | e }}</h1>
+      <p class="subtitle">{{ summary_text | safe }} · 数据截至 {{ date_display | e }}</p>
+    </div>
+    <button class="theme-toggle" id="themeToggle" type="button" title="切换主题">🌙</button>
+  </div>
+
+  {# KPI Cards #}
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-label">总数</div>
+      <div class="kpi-value">{{ kpi.total }}</div>
+      <div class="kpi-sub">只可转债</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">均价</div>
+      <div class="kpi-value">{{ "%.1f" | format(kpi.avg_price) }}</div>
+      <div class="kpi-sub">元</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">中位溢价率</div>
+      <div class="kpi-value">{{ "%.1f" | format(kpi.median_conv) }}%</div>
+      <div class="kpi-sub">转股溢价率</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">中位相对价值</div>
+      <div class="kpi-value {% if kpi.median_rv < 1.0 %}rv-low{% elif kpi.median_rv > 1.2 %}rv-high{% endif %}">{{ "%.2f" | format(kpi.median_rv) }}</div>
+      <div class="kpi-sub">BS定价</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">低估数</div>
+      <div class="kpi-value rv-low">{{ kpi.undervalued }}</div>
+      <div class="kpi-sub">RV &lt; 1.0</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">分域分布</div>
+      <div class="kpi-value" style="font-size:15px">{{ kpi.n_equity }}<span style="color:var(--green);font-size:11px"> 偏股</span> / {{ kpi.n_balanced }}<span style="color:var(--gold);font-size:11px"> 平衡</span> / {{ kpi.n_debt }}<span style="color:var(--accent);font-size:11px"> 偏债</span></div>
+    </div>
+  </div>
+
+  {# Controls #}
+  <div class="controls">
+    <input id="search" type="search" placeholder="搜索转债、正股、代码、题材...">
+    <select id="themeFilter">
+      <option value="">全部题材</option>
+      {% for t in all_themes %}
+      <option value="{{ t | e }}">{{ t | e }}</option>
+      {% endfor %}
+    </select>
+    <button class="ftag is-active" type="button" data-quick="all">全部</button>
+    <button class="ftag" type="button" data-quick="highPrice">价格&gt;130</button>
+    <button class="ftag" type="button" data-quick="lowPrice">价格&lt;100</button>
+    <button class="ftag" type="button" data-quick="lowPremium">偏股(&lt;20%)</button>
+    <button class="ftag" type="button" data-quick="midPremium">平衡(20-50%)</button>
+    <button class="ftag" type="button" data-quick="highPremium">偏债(&ge;50%)</button>
+    <div class="actions">
+      <button class="abtn" id="copyCodes" type="button">复制代码</button>
+      <button class="abtn" id="exportCsv" type="button">导出CSV</button>
+    </div>
+  </div>
+</header>
+
+<div class="main">
+  <div class="result-info">当前命中 <strong id="resultCount">{{ kpi.total }}</strong> 只转债 <span id="exportStatus"></span></div>
+  <div id="empty" class="empty">没有匹配结果</div>
+
+  {# Strategy Section #}
+  {% if strategy_picks %}
+  <section class="strategy-section" id="策略推荐">
+    <h2>策略推荐</h2>
+    <div class="strat-grid">
+      {% for strat_name, strat_data in strategy_picks.items() %}
+      <div class="strat-card">
+        <h3>{{ strat_icons.get(strat_name, "📋") }} {{ strat_name | e }}</h3>
+        <p class="desc">{{ strat_data.desc | e }}</p>
+        <table class="stable">
+          <tr><th>#</th><th>转债</th><th>正股</th><th>价格</th><th>转股溢价率</th><th>PE</th><th>20日σ</th><th>得分</th></tr>
+          {% for row in strat_data.rows %}
+          <tr>
+            <td class="srank">#{{ row[0] | e }}</td>
+            <td class="sname">{{ row[1] | e }}</td>
+            <td>{{ row[2] | e }}</td>
+            <td>{{ row[3] | e }}</td>
+            <td>{{ row[4] | e }}</td>
+            <td>{{ row[5] | e }}</td>
+            <td>{{ row[6] | e }}</td>
+            <td>{{ row[7] | e }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# Backtest Section #}
+  {% if backtest %}
+  <section class="backtest-section" id="回测曲线">
+    <h2>回测净值曲线 (周度调仓, T+1买入)</h2>
+    <div id="equity-chart"></div>
+    <div class="bt-stats">
+      <div>区间: {{ backtest.start_date | e }}→{{ backtest.end_date | e }} ({{ backtest.trading_days }}交易日, {{ backtest.n_rebalances }}次调仓)</div>
+      <div>双低: 累计{{ "%.2f" | format(backtest.cum_return_dl_pct) }}% / 年化{{ "%.1f" | format(backtest.annualized_dl_pct) }}%</div>
+      <div>分域双低: 累计{{ "%.2f" | format(backtest.cum_return_sn_pct) }}% / 年化{{ "%.1f" | format(backtest.annualized_sn_pct) }}%</div>
+      <div>全市场: 累计{{ "%.2f" | format(backtest.cum_return_mkt_pct) }}% / 年化{{ "%.1f" | format(backtest.annualized_mkt_pct) }}%</div>
+    </div>
+  </section>
+  {% endif %}
+
+  {# Bond Table Groups by Category #}
+  {% for cat in category_index %}
+  <div class="category-divider"><h2>{{ cat.name | e }}</h2></div>
+  {% for theme_info in cat.themes %}
+  {% set section = sections_by_theme[theme_info.theme] %}
+  {% if section %}
+  <div class="group" data-theme-group="{{ section.theme | e }}" data-category="{{ cat.name | e }}">
+    <div class="group-head">
+      <h3>{{ section.theme | e }}</h3>
+      <span class="cnt">({{ section.cards | length }})</span>
+      <span class="toggle">收起</span>
+    </div>
+    <div class="group-body">
+      <table class="btable">
+        <thead><tr>
+          <th data-sort-key="price">转债 <span class="sort-icon"></span></th>
+          <th>代码</th>
+          <th data-sort-key="price" class="num">价格/涨跌 <span class="sort-icon"></span></th>
+          <th data-sort-key="conv" class="num">转股溢价率 <span class="sort-icon"></span></th>
+          <th data-sort-key="pure" class="num col-hide-mobile">纯债溢价率 <span class="sort-icon"></span></th>
+          <th data-sort-key="vol" class="num">20日σ <span class="sort-icon"></span></th>
+          <th class="num col-hide-mobile">纯债YTM</th>
+          <th data-sort-key="rv" class="num">相对价值 <span class="sort-icon"></span></th>
+          <th data-sort-key="delta" class="num">Delta <span class="sort-icon"></span></th>
+          <th data-sort-key="balance" class="num">余额(亿) <span class="sort-icon"></span></th>
+          <th class="col-hide-mobile">评级</th>
+          <th class="col-hide-mobile">到期</th>
+          <th>强赎</th>
+          <th>下修</th>
+          <th>策略</th>
+          <th class="col-hide-mobile">主营</th>
+          <th class="col-hide-mobile">题材</th>
+        </tr></thead>
+        <tbody>
+        {% for card in section.cards %}
+        <tr class="bond-row" data-idx="{{ card.idx }}">
+          <td class="bname bname-cell" data-label="转债">{{ card.bond_name | e }}{{ card.sector_badge | safe }}<small>{{ card.stock_name | e }} · {{ card.industry | e }}</small></td>
+          <td class="bcode" data-label="代码">{{ card.bond_code | e }}</td>
+          <td class="bprice num" data-label="价格">{{ card.price | e }}<br><span class="{{ card.chg_class }}">{{ card.day_chg | e }}</span></td>
+          <td class="num" data-label="转股溢价率">{{ card.conv | e }}</td>
+          <td class="num col-hide-mobile" data-label="纯债溢价率">{{ card.pure | e }}</td>
+          <td class="num" data-label="波动率">{{ card.vol | e }}</td>
+          <td class="num col-hide-mobile" data-label="纯债YTM">{{ card.pure_bond_ytm | e }}</td>
+          <td class="num" data-label="相对价值"><span class="rv-cell {{ card.rv_class }}">{{ card.rv_text | e }}{{ card.rv_spark | safe }}</span></td>
+          <td class="num" data-label="Delta"><span class="rv-cell">{{ card.delta_text | e }}{{ card.delta_spark | safe }}</span></td>
+          <td class="num" data-label="余额">{{ card.balance | e }}</td>
+          <td class="col-hide-mobile" data-label="评级">{{ card.rating | e }}</td>
+          <td class="col-hide-mobile" data-label="到期">{{ card.maturity | e }}</td>
+          <td data-label="强赎">{{ card.call_html | safe }}</td>
+          <td data-label="下修">{{ card.down_html | safe }}</td>
+          <td data-label="策略">{% if card.strategy %}<span class="bstrat">{{ card.strategy | e }}</span>{% endif %}</td>
+          <td class="bbiz col-hide-mobile" data-label="主营">{{ card.business | e }}</td>
+          <td class="bthemes col-hide-mobile" data-label="题材">{% for t in card.themes %}<span>{{ t | e }}</span>{% endfor %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% endfor %}
+</div>
+
+{# Footer / Appendix #}
+{% if appendix %}
+<footer>
+  <h2>附录 · 字段说明</h2>
+  <ul>
+    {% for line in appendix %}
+    <li>{{ line | e }}</li>
+    {% endfor %}
+  </ul>
+</footer>
+{% endif %}
+
+<script>
+window.__CBOND_DATA__ = {{ bond_data_json | safe }};
+window.__BACKTEST__ = {{ backtest_json | safe }};
+{{ js | safe }}
+</script>
+</body>
+</html>
