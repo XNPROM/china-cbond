@@ -52,20 +52,22 @@ class PercentileTests(unittest.TestCase):
 
 class SectorClassificationTests(unittest.TestCase):
     def test_equity_sector(self):
-        """delta >= 0.7 -> 偏股"""
+        """delta >= 0.6 -> 偏股"""
+        self.assertEqual(_classify_sector(0.6), "偏股")
         self.assertEqual(_classify_sector(0.7), "偏股")
         self.assertEqual(_classify_sector(0.9), "偏股")
 
     def test_balanced_sector(self):
-        """0.4 <= delta < 0.7 -> 平衡"""
+        """0.3 <= delta < 0.6 -> 平衡"""
+        self.assertEqual(_classify_sector(0.3), "平衡")
         self.assertEqual(_classify_sector(0.4), "平衡")
         self.assertEqual(_classify_sector(0.55), "平衡")
-        self.assertEqual(_classify_sector(0.69), "平衡")
+        self.assertEqual(_classify_sector(0.59), "平衡")
 
     def test_debt_sector(self):
-        """delta < 0.4 -> 偏债"""
+        """delta < 0.3 -> 偏债"""
         self.assertEqual(_classify_sector(0.1), "偏债")
-        self.assertEqual(_classify_sector(0.39), "偏债")
+        self.assertEqual(_classify_sector(0.29), "偏债")
 
     def test_zero_delta(self):
         """Zero delta should be 偏债"""
@@ -120,11 +122,11 @@ class RankAndScoreTests(unittest.TestCase):
         self.assertAlmostEqual(bond_c["rank_overall"], 7.5)
 
     def test_sector_classification_in_scoring(self):
-        """Each bond should be assigned correct sector based on bs_delta."""
+        """Each bond should be assigned correct sector based on bs_delta (thresholds 0.6/0.3)."""
         candidates = [
-            self._make_bond("A", conv_prem=10, latest=100, bs_delta=0.8),
-            self._make_bond("B", conv_prem=30, latest=100, bs_delta=0.5),
-            self._make_bond("C", conv_prem=60, latest=100, bs_delta=0.2),
+            self._make_bond("A", conv_prem=10, latest=100, bs_delta=0.8),   # 偏股 >=0.6
+            self._make_bond("B", conv_prem=30, latest=100, bs_delta=0.5),   # 平衡 0.3-0.6
+            self._make_bond("C", conv_prem=60, latest=100, bs_delta=0.2),   # 偏债 <0.3
         ]
 
         scored = _rank_and_score(candidates)
@@ -152,7 +154,6 @@ class RankAndScoreTests(unittest.TestCase):
 
         scored = _rank_and_score(candidates)
 
-        # Both have same conv_prem, but ranked by position
         ranks = {s["code"]: s["rank_conv_prem"] for s in scored}
         self.assertEqual(set(ranks.values()), {1, 2})
 

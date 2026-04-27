@@ -50,20 +50,41 @@ def main():
     ucodes = sorted({r["ucode"] for r in uni["items"] if r.get("ucode")})
     print(f"[stocks] {len(ucodes)} underlying; window {start}..{end}")
 
+    def _consume(resp):
+        for t in resp.get("tables", []):
+            code = t["thscode"]
+            tbl = t.get("table", {})
+            closes = tbl.get("close") or []
+            closes = [c for c in closes if isinstance(c, (int, float)) and c > 0]
+            vol, n = _annualized_vol(closes)
+            vols[code] = {"vol": vol, "n": n}
+
     vols = {}
     for b in batched(ucodes, args.batch_size):
         try:
-            r = history(b, "close", start, end, {"Interval": "D", "Fill": "Omit"})
-            for t in r.get("tables", []):
-                code = t["thscode"]
-                tbl = t.get("table", {})
-                closes = tbl.get("close") or []
-                closes = [c for c in closes if isinstance(c, (int, float)) and c > 0]
-                vol, n = _annualized_vol(closes)
-                vols[code] = {"vol": vol, "n": n}
+            _consume(history(b, "close", start, end, {"Interval": "D", "Fill": "Omit"}))
         except Exception as e:
-            print(f"[warn] history batch err: {e}")
+            print(f"[warn] history batch err: {e}; falling back to per-code")
+            for code in b:
+                try:
+                    _consume(history([code], "close", start, end,
+                                     {"Interval": "D", "Fill": "Omit"}))
+                except Exception as e2:
+                    print(f"[warn]   per-code err {code}: {e2}")
+                time.sleep(0.15)
         time.sleep(0.2)
+
+    # Final pass: any ucode that never got consumed → retry once individually.
+    missing = [c for c in ucodes if c not in vols]
+    if missing:
+        print(f"[retry] {len(missing)} codes had no response from batched calls; retrying individually")
+        for code in missing:
+            try:
+                _consume(history([code], "close", start, end,
+                                 {"Interval": "D", "Fill": "Omit"}))
+            except Exception as e:
+                print(f"[warn]   retry err {code}: {e}")
+            time.sleep(0.15)
 
     # emit per-bond (dup volatility across bonds sharing ucode)
     with open(args.out, "w", newline="") as f:
@@ -78,16 +99,17 @@ def main():
     print(f"[done] vol for {sum(1 for v in vols.values() if v.get('vol') is not None)}"
           f"/{len(ucodes)} stocks → {args.out}")
 
-    # upsert to DuckDB (by ucode)
-    db_rows = [
-        {
+    # upsert to DuckDB (by ucode).
+    # vol_20d_pct is stored as a percentage number (34.52 means 34.52%).
+    db_rows = []
+    for ucode in vols:
+        v = vols[ucode].get("vol")
+        db_rows.append({
             "trade_date": args.asof,
             "ucode": ucode,
-            "vol_20d_pct": vols[ucode].get("vol"),
+            "vol_20d_pct": round(v * 100, 4) if v is not None else None,
             "n_samples": vols[ucode].get("n", 0),
-        }
-        for ucode in vols
-    ]
+        })
     con = connect()
     init_schema(con)
     n = db_upsert(con, "vol_daily", db_rows, ["trade_date", "ucode"])

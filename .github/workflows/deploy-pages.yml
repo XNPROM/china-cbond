@@ -1,10 +1,10 @@
-name: Deploy to GitHub Pages
+name: Deploy Report to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, developer-1]
     paths:
-      - 'docs/**'
+      - 'reports/**'
   workflow_dispatch:
 
 permissions:
@@ -24,10 +24,30 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare Pages artifact
+        run: |
+          mkdir -p _site
+          # Copy every dated report (overview + strategy) preserving directory structure
+          for dir in reports/20*/; do
+            date=$(basename "$dir")
+            mkdir -p "_site/$date"
+            if [ -f "$dir/cbond_overview.html" ]; then
+              cp "$dir/cbond_overview.html" "_site/$date/index.html"
+            fi
+            if [ -f "$dir/cbond_strategy.html" ]; then
+              cp "$dir/cbond_strategy.html" "_site/$date/cbond_strategy.html"
+            fi
+          done
+          # Latest report becomes root index.html
+          LATEST=$(ls -d reports/20*/ 2>/dev/null | sort | tail -1)
+          if [ -n "$LATEST" ] && [ -f "${LATEST}cbond_overview.html" ]; then
+            cp "${LATEST}cbond_overview.html" _site/index.html
+            if [ -f "${LATEST}cbond_strategy.html" ]; then
+              cp "${LATEST}cbond_strategy.html" _site/cbond_strategy.html
+            fi
+          fi
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

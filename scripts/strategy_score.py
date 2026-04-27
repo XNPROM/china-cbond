@@ -1,10 +1,10 @@
 """Double-low strategy scoring for convertible bonds.
 
-Strategies:
+Two strategies:
 1. 双低 (vanilla): PE>0, vol>Q1, rank = 1.5*rank(conv_prem) + rank(price), top 30
-2. 双低-分域 (sector-neutral): Same filter, classify into 3 sectors by Delta
-   (偏股 delta>=0.7, 平衡 0.4<=delta<0.7, 偏债 delta<0.4), rank within each sector
-3. 低估: Broad pool, rank by BS relative value ascending
+2. 双低-分域 (sector-neutral): Same filter, then classify into 3 sectors by
+   conv_prem (偏股<20%, 平衡20-50%, 偏债≥50%), rank independently within each
+   sector, pick top 10 per sector.
 
 Usage:
   python3 strategy_score.py \
@@ -18,13 +18,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, init_schema, upsert as db_upsert
 
 
-SECTOR_THRESHOLDS = [
-    ("偏股", lambda d: d >= 0.7),
-    ("平衡", lambda d: 0.4 <= d < 0.7),
-    ("偏债", lambda d: d < 0.4),
-]
-
-
 def _percentile(sorted_vals, pct):
     if not sorted_vals:
         return 0
@@ -36,11 +29,13 @@ def _percentile(sorted_vals, pct):
 
 
 def _classify_sector(delta):
+    """Classify by BS Delta: 偏股≥0.6, 平衡0.3–0.6, 偏债<0.3."""
     if delta is None:
         return "偏债"
-    for name, pred in SECTOR_THRESHOLDS:
-        if pred(delta):
-            return name
+    if delta >= 0.6:
+        return "偏股"
+    if delta >= 0.3:
+        return "平衡"
     return "偏债"
 
 
@@ -83,20 +78,8 @@ def main():
     ap.add_argument("--sector-top", type=int, default=10)
     args = ap.parse_args()
 
-    if not os.path.exists(args.dataset):
-        print(f"[error] Dataset file not found: {args.dataset}")
-        sys.exit(1)
-
-    try:
-        dataset = json.load(open(args.dataset, encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        print(f"[error] Invalid JSON in dataset: {e}")
-        sys.exit(1)
-
-    items = dataset.get("items")
-    if not items:
-        print("[error] Dataset has no items")
-        sys.exit(1)
+    dataset = json.load(open(args.dataset, encoding="utf-8"))
+    items = dataset["items"]
 
     # Filter: PE > 0, vol_20d present
     candidates = [
@@ -108,18 +91,10 @@ def main():
     ]
     print(f"[filter] {len(candidates)}/{len(items)} after PE>0 + data completeness")
 
-    if not candidates:
-        print("[error] No candidates after filtering — check data quality")
-        sys.exit(1)
-
     # Filter: vol > Q1
     vol_q1 = _percentile(sorted(r["vol_20d"] for r in candidates), 25)
     candidates = [r for r in candidates if r["vol_20d"] >= vol_q1]
     print(f"[filter] {len(candidates)} after vol>={vol_q1:.2f}%")
-
-    if not candidates:
-        print("[error] No candidates after vol filter — check vol_20d data")
-        sys.exit(1)
 
     # --- Strategy 1: Vanilla double-low ---
     scored = _rank_and_score(candidates)
@@ -129,10 +104,10 @@ def main():
         row["strategy"] = "双低"
         row["note"] = f"转股溢价率{row['conv_prem']:.1f}%，价格{row['latest']:.1f}"
 
-    # --- Strategy 2: Sector-neutral double-low (by Delta) ---
+    # --- Strategy 2: Sector-neutral double-low (classified by BS Delta) ---
     sector_groups = {"偏股": [], "平衡": [], "偏债": []}
     for r in candidates:
-        s = _classify_sector(r.get("bs_delta"))
+        s = _classify_sector(r["bs_delta"])
         sector_groups[s].append(r)
 
     sector_picks = []
@@ -145,93 +120,73 @@ def main():
         n_sector = len(group)
         for i, row in enumerate(top_s):
             row["strategy"] = f"双低-{sector_name}"
-            row["note"] = f"{sector_name}({n_sector}只) Delta={row.get('bs_delta',0):.2f}，价格{row['latest']:.1f}"
+            row["note"] = f"{sector_name}({n_sector}只) Delta={row.get('bs_delta', ''):.2f}，转股溢价率{row['conv_prem']:.1f}%，价格{row['latest']:.1f}"
             sector_picks.append(row)
         print(f"[sector] {sector_name}: {n_sector} candidates, top {len(top_s)}")
 
     # --- Strategy 3: Relative value (低估策略) ---
-    # Uses a BROADER candidate pool than double-low (no PE>0 filter)
-    # because a bond can be undervalued (low RV) regardless of underlying PE
-    rv_picks = []
-    try:
-        con = connect()
-        init_schema(con)
-        rv_rows = con.execute(
-            "SELECT code, relative_value FROM valuation_daily WHERE trade_date = ? AND relative_value IS NOT NULL",
-            [args.trade_date]
-        ).fetchall()
-        con.close()
-        rv_map = {r[0]: r[1] for r in rv_rows}
+    # Read relative_value from DB (written by bs_pricing.py)
+    con = connect()
+    rv_rows = con.execute(
+        "SELECT code, relative_value FROM valuation_daily WHERE trade_date = ? AND relative_value IS NOT NULL",
+        [args.trade_date]
+    ).fetchall()
+    con.close()
+    rv_map = {r[0]: r[1] for r in rv_rows}
 
-        # Broader pool: only require price, conv_prem, balance>0, and valid RV
-        rv_pool = [
-            r for r in items
-            if r.get("conv_prem") is not None
-            and r.get("latest") is not None
-            and r.get("balance") is not None and r["balance"] > 0
-            and rv_map.get(r["code"]) is not None
-            and 0.5 <= rv_map[r["code"]] <= 2.0
-        ]
-        if rv_pool:
-            rv_sorted = sorted(rv_pool, key=lambda r: rv_map[r["code"]])
-            for i, r in enumerate(rv_sorted[:args.sector_top]):
-                rv = rv_map[r["code"]]
-                rv_picks.append({
-                    "code": r["code"],
-                    "name": r["name"],
-                    "ucode": r.get("ucode", ""),
-                    "uname": r.get("uname", ""),
-                    "sector": _classify_sector(r.get("bs_delta")),
-                    "rank_conv_prem": 0,
-                    "rank_price": 0,
-                    "rank_overall": float(i + 1),
-                    "conv_prem": r["conv_prem"],
-                    "latest": r["latest"],
-                    "pe_ttm": r.get("pe_ttm"),
-                    "vol_20d": r.get("vol_20d"),
-                    "day_chg": r.get("day_chg"),
-                    "strategy": "低估",
-                    "note": f"相对价值{rv:.2f}，转股溢价率{r['conv_prem']:.1f}%"
-                })
-            print(f"[rv] 低估: {len(rv_pool)} candidates, top {len(rv_picks)}")
-    except Exception as e:
-        print(f"[warn] Could not read relative_value from DB: {e}")
-        print("[warn] Skipping 低估 strategy — run bs_pricing.py first")
+    rv_picks = []
+    rv_candidates = [r for r in candidates if rv_map.get(r["code"]) is not None and 0.5 <= rv_map[r["code"]] <= 2.0]
+    if rv_candidates:
+        rv_sorted = sorted(rv_candidates, key=lambda r: rv_map[r["code"]])
+        for i, r in enumerate(rv_sorted[:args.sector_top]):
+            rv = rv_map[r["code"]]
+            rv_picks.append({
+                "code": r["code"],
+                "name": r["name"],
+                "ucode": r.get("ucode", ""),
+                "uname": r.get("uname", ""),
+                "sector": _classify_sector(r.get("bs_delta")),
+                "rank_conv_prem": 0,
+                "rank_price": 0,
+                "rank_overall": float(i + 1),
+                "conv_prem": r["conv_prem"],
+                "latest": r["latest"],
+                "pe_ttm": r.get("pe_ttm"),
+                "vol_20d": r.get("vol_20d"),
+                "day_chg": r.get("day_chg"),
+                "strategy": "低估",
+                "note": f"相对价值{rv:.2f}，转股溢价率{r['conv_prem']:.1f}%"
+            })
+        print(f"[rv] 低估: {len(rv_candidates)} candidates, top {len(rv_picks)}")
 
     # Merge and write
     all_picks = vanilla_top + sector_picks + rv_picks
-    try:
-        os.makedirs(os.path.dirname(args.out), exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
-            for row in all_picks:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"[done] vanilla {len(vanilla_top)} + sector {len(sector_picks)} + rv {len(rv_picks)} → {args.out}")
-    except IOError as e:
-        print(f"[error] Failed to write output: {e}")
-        sys.exit(1)
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        for row in all_picks:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    print(f"[done] vanilla {len(vanilla_top)} + sector {len(sector_picks)} + rv {len(rv_picks)} → {args.out}")
 
     # Upsert to DB
-    if all_picks:
-        try:
-            db_rows = [
-                {
-                    "trade_date": args.trade_date,
-                    "code": row["code"],
-                    "strategy": row["strategy"],
-                    "rank_overall": row["rank_overall"],
-                    "rank_conv_prem": row["rank_conv_prem"],
-                    "rank_price": row["rank_price"],
-                    "note": row["note"],
-                }
-                for row in all_picks
-            ]
-            con = connect()
-            init_schema(con)
-            n = db_upsert(con, "strategy_picks", db_rows, ["trade_date", "code", "strategy"])
-            con.close()
-            print(f"[db] strategy_picks upserted {n} rows")
-        except Exception as e:
-            print(f"[error] Failed to upsert strategy picks to DB: {e}")
+    db_rows = [
+        {
+            "trade_date": args.trade_date,
+            "code": row["code"],
+            "strategy": row["strategy"],
+            "rank_overall": row["rank_overall"],
+            "rank_conv_prem": row["rank_conv_prem"],
+            "rank_price": row["rank_price"],
+            "note": row["note"],
+        }
+        for row in all_picks
+    ]
+    con = connect()
+    # Recompute is date-scoped: remove stale picks from previous runs before inserting
+    # the current strategy set, otherwise changed filters leave old rows behind.
+    con.execute("DELETE FROM strategy_picks WHERE trade_date = ?", [args.trade_date])
+    n = db_upsert(con, "strategy_picks", db_rows, ["trade_date", "code", "strategy"])
+    con.close()
+    print(f"[db] strategy_picks upserted {n} rows")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ Key improvement over naive BS:
 Inputs (from dataset.json):
   - latest: bond price
   - conv_prem: conversion premium rate (%)
-  - vol_20d: 20-day annualized volatility (decimal)
+  - vol_20d: 20-day annualized volatility (percentage, e.g. 34.52 means 34.52%)
   - pure_bond_ytm: pure bond yield to maturity (%)
   - surplus_years: remaining term (years)
   - pure_bond_value: pure bond value from iFinD
@@ -67,27 +67,11 @@ def main():
     ap.add_argument("--default-r", type=float, default=0.025)
     args = ap.parse_args()
 
-    if not os.path.exists(args.dataset):
-        print(f"[error] Dataset file not found: {args.dataset}")
-        sys.exit(1)
-
-    try:
-        dataset = json.load(open(args.dataset, encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        print(f"[error] Invalid JSON in dataset: {e}")
-        sys.exit(1)
-
-    items = dataset.get("items")
-    if not items:
-        print("[error] Dataset has no items")
-        sys.exit(1)
+    dataset = json.load(open(args.dataset, encoding="utf-8"))
+    items = dataset["items"]
 
     results = []
     priced = 0
-    skipped_missing = 0
-    skipped_invalid = 0
-    skipped_err = 0
-
     for it in items:
         price = it.get("latest")
         conv_prem = it.get("conv_prem")
@@ -99,11 +83,9 @@ def main():
 
         if not all(v is not None for v in [price, conv_prem, vol_20d]):
             results.append(None)
-            skipped_missing += 1
             continue
         if price <= 0 or conv_prem <= -90 or vol_20d <= 0:
             results.append(None)
-            skipped_invalid += 1
             continue
 
         # Conversion value S
@@ -114,8 +96,9 @@ def main():
         # Strike: use actual maturity call price if available, else 110
         K = maturity_call if maturity_call and maturity_call > 0 else 110.0
 
-        # Volatility
-        sigma = vol_20d
+        # Volatility: vol_20d is stored as percentage (e.g. 34.52 = 34.52%),
+        # convert to decimal for BS formula.
+        sigma = vol_20d / 100.0
 
         # Discount rate: use risk-free rate (CGB 5Y or default 2.5%).
         # Do NOT use YTM — it includes credit spread, violating BS risk-free assumption.
@@ -128,7 +111,6 @@ def main():
             option_val, delta, gamma, theta, vega = bs_call(S, K, sigma, r, T)
         except (ValueError, ZeroDivisionError, OverflowError):
             results.append(None)
-            skipped_err += 1
             continue
 
         # Pure bond value: use iFinD value if available.
@@ -138,7 +120,6 @@ def main():
             pbv = pure_bond_val
         else:
             results.append(None)
-            skipped_missing += 1
             continue
 
         total_val = option_val + pbv
@@ -158,14 +139,10 @@ def main():
 
     db_rows = [r for r in results if r is not None]
     if db_rows:
-        try:
-            con = connect()
-            init_schema(con)
-            n = db_upsert(con, "valuation_daily", db_rows, ["trade_date", "code"])
-            con.close()
-            print(f"[db] valuation_daily BS fields upserted for {n} rows")
-        except Exception as e:
-            print(f"[error] Failed to upsert to DB: {e}")
+        con = connect()
+        n = db_upsert(con, "valuation_daily", db_rows, ["trade_date", "code"])
+        con.close()
+        print(f"[db] valuation_daily BS fields upserted for {n} rows")
 
     # Also write BS fields back into dataset.json (avoids needing a 2nd assemble run)
     bs_map = {r["code"]: r for r in db_rows if r}
@@ -178,12 +155,9 @@ def main():
             it["bs_gamma"] = bs["bs_gamma"]
             it["bs_theta"] = bs["bs_theta"]
             it["bs_vega"] = bs["bs_vega"]
-    try:
-        with open(args.dataset, "w", encoding="utf-8") as f:
-            json.dump(dataset, f, ensure_ascii=False, indent=2)
-        print(f"[json] dataset.json updated with BS fields in-place")
-    except IOError as e:
-        print(f"[error] Failed to write dataset.json: {e}")
+    with open(args.dataset, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=2)
+    print(f"[json] dataset.json updated with BS fields in-place")
 
     # Stats
     rv_vals = [r["relative_value"] for r in db_rows if r and r.get("relative_value") is not None]
@@ -206,8 +180,7 @@ def main():
               f"0.1-0.5:{sum(1 for v in delta_vals if 0.1<=v<0.5)}, "
               f">0.5:{sum(1 for v in delta_vals if v>=0.5)}")
 
-    print(f"[done] BS priced {priced}/{len(items)} bonds "
-          f"(skip_missing={skipped_missing}, skip_invalid={skipped_invalid}, skip_err={skipped_err})")
+    print(f"[done] BS priced {priced}/{len(items)} bonds (trade_date={args.trade_date})")
 
 
 if __name__ == "__main__":

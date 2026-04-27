@@ -1,6 +1,7 @@
 """Render the overview Markdown into a single-file interactive HTML report."""
 
 import argparse
+import glob
 import json
 import os
 
@@ -29,6 +30,25 @@ def load_backtest_payload(backtest_path):
         return json.load(handle)
 
 
+def make_index(reports_dir):
+    """Update reports/index.html to redirect to the latest report.
+
+    Scans reports/YYYY-MM-DD/cbond_overview.html, picks the newest date,
+    and writes a self-contained copy as reports/index.html.
+    """
+    candidates = sorted(glob.glob(os.path.join(reports_dir, "????-??-??", "cbond_overview.html")))
+    if not candidates:
+        return
+    latest = candidates[-1]
+    date_str = os.path.basename(os.path.dirname(latest))
+    index_path = os.path.join(reports_dir, "index.html")
+    with open(latest, encoding="utf-8") as f:
+        content = f.read()
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"[index] reports/index.html -> {date_str}/cbond_overview.html (self-contained copy)")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--in", dest="inp", required=True)
@@ -36,6 +56,8 @@ def main():
     parser.add_argument("--title", default="可转债概览")
     parser.add_argument("--trade-date", default="")
     parser.add_argument("--backtest", default="")
+    parser.add_argument("--update-index", action="store_true",
+                        help="also update reports/index.html after writing")
     args = parser.parse_args()
 
     with open(args.inp, encoding="utf-8") as handle:
@@ -64,6 +86,9 @@ def main():
     with open(args.out, "w", encoding="utf-8") as handle:
         handle.write(html_out)
     print(f"[done] -> {args.out} ({os.path.getsize(args.out)} bytes)")
+
+    if args.update_index:
+        make_index(os.path.dirname(os.path.dirname(args.out)))
 
 
 if __name__ == "__main__":

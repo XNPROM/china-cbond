@@ -1,5 +1,9 @@
-"""Thin wrapper around iFinD HTTP quant endpoints."""
-import json, urllib.request, ssl, time
+"""Thin wrapper around iFinD HTTP quant endpoints.
+
+Uses curl subprocess instead of urllib to work around LibreSSL 2.8.3 TLS
+incompatibility with quantapi.51ifind.com.
+"""
+import json, subprocess, time
 from _auth import get_access_token
 
 BASE = "https://quantapi.51ifind.com/api/v1"
@@ -8,14 +12,23 @@ BASE = "https://quantapi.51ifind.com/api/v1"
 def _post(path, body, retries=3, timeout=60):
     url = f"{BASE}/{path}"
     token = get_access_token()
-    headers = {"Content-Type": "application/json", "access_token": token}
-    data = json.dumps(body).encode("utf-8")
+    payload = json.dumps(body)
     last_err = None
     for i in range(retries):
         try:
-            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context()) as r:
-                return json.loads(r.read().decode("utf-8"))
+            result = subprocess.run(
+                [
+                    "curl", "-s", "-X", "POST", url,
+                    "-H", "Content-Type: application/json",
+                    "-H", f"access_token: {token}",
+                    "--data", payload,
+                    "--max-time", str(timeout),
+                ],
+                capture_output=True, text=True, timeout=timeout + 5,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"curl error: {result.stderr.strip()}")
+            return json.loads(result.stdout)
         except Exception as e:
             last_err = e
             time.sleep(0.5 * (2 ** i))
@@ -23,11 +36,7 @@ def _post(path, body, retries=3, timeout=60):
 
 
 def basic_data(codes, indipara):
-    """basic_data_service — static/snapshot fields.
-
-    codes: list[str] or comma-joined str
-    indipara: list[{"indicator":..., "indiparams":[...]}]
-    """
+    """basic_data_service — static/snapshot fields."""
     if isinstance(codes, list):
         codes = ",".join(codes)
     return _post("basic_data_service", {"codes": codes, "indipara": indipara})
@@ -43,7 +52,7 @@ def realtime(codes, indicators):
 
 
 def history(codes, indicators, startdate, enddate, functionpara=None):
-    """cmd_history_quotation — daily/weekly/monthly bars."""
+    """cmd_history_quotation — daily bars."""
     if isinstance(codes, list):
         codes = ",".join(codes)
     if isinstance(indicators, list):

@@ -58,6 +58,13 @@ def _safe_float(arr, idx):
         return None
 
 
+def _interp_log(start, end, frac):
+    """Geometric interpolation in log-space for multiplicative equity."""
+    if start <= 0 or end <= 0:
+        return 0.0
+    return start * math.exp(frac * math.log(end / start))
+
+
 # ── Data layer ───────────────────────────────────────────────────────
 
 def fetch_trading_dates(codes, start_ymd, end_ymd):
@@ -97,35 +104,83 @@ def fetch_history_prices(codes, start_ymd, end_ymd):
     return prices
 
 
-def fetch_day_fundamentals(codes, date_ymd):
-    """Fetch conv_prem, balance, and 20d vol for a specific date via iFinD."""
+def fetch_day_fundamentals(codes, date_ymd, ucode_map=None, vol_db=None):
+    """Fetch conv_prem + balance from iFinD; PE via underlying stock; vol from local DB.
+
+    Aligns with the live pipeline: PE is keyed by underlying stock code (ths_pe_ttm),
+    vol_20d is computed by compute_volatility.py and stored in vol_daily DB.
+    """
     date_param = _ymd_to_dash(date_ymd)
-    fields = [
+    cb_fields = [
         {"indicator": "ths_conversion_premium_rate_cbond", "indiparams": [date_param]},
         {"indicator": "ths_bond_balance_cbond", "indiparams": [date_param]},
-        {"indicator": "ths_vol_20d_cbond", "indiparams": [date_param]},
     ]
     result = {}
     for batch_codes in batched(codes, 40):
         try:
-            r = basic_data(batch_codes, fields)
+            r = basic_data(batch_codes, cb_fields)
             for t in r.get("tables", []):
                 code = t.get("thscode", "")
                 tbl = t.get("table", {})
                 conv_prem = _safe_float(tbl.get("ths_conversion_premium_rate_cbond", []), 0)
                 balance = _safe_float(tbl.get("ths_bond_balance_cbond", []), 0)
-                vol_20d = _safe_float(tbl.get("ths_vol_20d_cbond", []), 0)
                 if conv_prem is not None:
                     result[code] = {
                         "conv_prem": conv_prem,
                         "balance": balance,
                         "pe_ttm": None,
-                        "vol_20d": vol_20d,
+                        "vol_20d": None,
                     }
             time.sleep(0.12)
         except Exception as e:
             print(f"[warn] basic_data batch for {date_ymd}: {e}")
+
+    # PE: fetch via underlying stock code
+    if ucode_map:
+        ucodes = list({ucode_map.get(c, "") for c in result if ucode_map.get(c, "")})
+        pe_by_ucode = {}
+        for batch in batched(ucodes, 50):
+            try:
+                r = basic_data(batch, [{"indicator": "ths_pe_ttm", "indiparams": [date_param]}])
+                for t in r.get("tables", []):
+                    pe_by_ucode[t.get("thscode", "")] = _safe_float(
+                        t.get("table", {}).get("ths_pe_ttm", []), 0)
+                time.sleep(0.10)
+            except Exception as e:
+                print(f"[warn] pe batch for {date_ymd}: {e}")
+        for code, row in result.items():
+            row["pe_ttm"] = pe_by_ucode.get(ucode_map.get(code, ""))
+
+    # vol_20d: from local DB (computed by compute_volatility.py)
+    if vol_db is not None and ucode_map:
+        for code, row in result.items():
+            ucode = ucode_map.get(code, "")
+            row["vol_20d"] = vol_db.get((ucode, date_param))
+
     return result
+
+
+def _load_ucode_map():
+    """Build bond→ucode map from any available dataset.json (most stable)."""
+    import glob as _glob
+    paths = sorted(_glob.glob("data/raw/asof=????-??-??/dataset.json"))
+    for path in reversed(paths):
+        try:
+            ds = json.load(open(path, encoding="utf-8"))
+            m = {item["code"]: item.get("ucode", "") for item in ds.get("items", [])}
+            if m:
+                return m
+        except Exception:
+            pass
+    return {}
+
+
+def _load_vol_db():
+    """Load vol_daily as {(ucode, date_iso): vol_20d_pct}."""
+    con = connect()
+    rows = con.execute("SELECT ucode, trade_date, vol_20d_pct FROM vol_daily").fetchall()
+    con.close()
+    return {(r[0], r[1]): r[2] for r in rows}
 
 
 def fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd):
@@ -323,11 +378,12 @@ def persist_fundamentals_to_db(fundamentals):
 # ── BS formulas ──────────────────────────────────────────────────────
 
 def classify_sector(delta):
+    """Classify by BS Delta: 偏股≥0.6, 平衡0.3–0.6, 偏债<0.3. Matches strategy_score.py."""
     if delta is None:
         return "偏债"
-    if delta >= 0.7:
+    if delta >= 0.6:
         return "偏股"
-    if delta >= 0.4:
+    if delta >= 0.3:
         return "平衡"
     return "偏债"
 
@@ -390,10 +446,7 @@ def _percentile(sorted_vals, pct):
 # ── Universe filter ──────────────────────────────────────────────────
 
 def filter_universe(bonds, min_balance=MIN_BALANCE_YI, max_price=MAX_PRICE):
-    """Pre-filter: liquidity + price cap + basic data completeness.
-
-    Returns a new list (no mutation of input dicts).
-    """
+    """Pre-filter: liquidity + price cap + basic data completeness."""
     out = []
     for b in bonds:
         if b.get("conv_prem") is None:
@@ -423,10 +476,7 @@ def _apply_pe_vol_filter(eligible):
 # ── Strategy functions (pure: no side effects) ───────────────────────
 
 def _rank_double_low(bonds):
-    """Compute double-low ranking. Returns sorted list of (code, dl_score).
-
-    Does NOT mutate input dicts.
-    """
+    """Compute double-low ranking. Returns sorted list of (code, dl_score)."""
     eligible = _apply_pe_vol_filter(bonds)
     if not eligible:
         return []
@@ -510,68 +560,41 @@ class Portfolio:
     def rebalance(self, picks, buy_px, sell_px):
         """Execute one rebalance cycle.
 
-        Args:
-            picks: list of codes to hold this period
-            buy_px: {code: price} at period start (T+1 open proxy = close)
-            sell_px: {code: price} at period end
-
         Returns:
             period_return (float or None if no valid holdings),
             n_held (int),
             turnover_rate (float: fraction of portfolio that changed)
         """
-        # Determine actual holdings: picks that have valid buy price
         actual = [c for c in picks if buy_px.get(c) and buy_px[c] > 0]
         if len(actual) < MIN_HOLDINGS:
-            # Not enough tradable picks -> freeze equity, return None
             return None, 0, 0.0
 
         new_set = set(actual)
         prev_set = self.holdings
 
-        # Per-position returns
         pos_returns = []
         for code in actual:
             pb = buy_px[code]
             ps = sell_px.get(code)
-            # Suspended / no sell price -> 0% gross return
             gross = (ps - pb) / pb if (ps and ps > 0) else 0.0
-
             cost = 0.0
             if code not in prev_set:
-                # New position: pay buy cost
                 cost += self.one_way_cost
-            # Every position pays sell cost at period end
-            # (continuing positions will "re-buy" next period at no cost
-            #  because they stay in holdings; exiting positions leave)
-            # Correct approach: only charge sell cost for positions that will exit.
-            # But we don't know next period's picks yet.
-            # Standard approach: charge buy cost for new entries this period,
-            # charge sell cost for exits from PREVIOUS period's perspective.
-            # Since we're computing THIS period's return, we charge:
-            # - buy cost on new entries (already done above)
-            # - For simplicity and correctness: charge sell cost on exits
-            #   as a drag on portfolio return (handled below).
             pos_returns.append(gross - cost)
 
         period_ret = sum(pos_returns) / len(pos_returns)
 
-        # Charge sell cost for positions exiting (were in prev, not in new)
         exiting = prev_set - new_set
         if prev_set and exiting:
-            # Sell cost drag: number of exiting / prev portfolio size * one_way_cost
-            # This represents the cost of selling those positions at prev period's end
             exit_drag = (len(exiting) / len(prev_set)) * self.one_way_cost
             period_ret -= exit_drag
 
-        # Turnover rate
         if prev_set:
             changed = len(exiting | (new_set - prev_set))
             turnover = changed / max(len(prev_set | new_set), 1)
         else:
-            turnover = 1.0  # first period: 100% turnover
+            turnover = 1.0
 
-        # Update state
         self.holdings = new_set
         self.equity *= (1 + period_ret)
         self.equity = max(self.equity, 0.0)
@@ -582,32 +605,22 @@ class Portfolio:
 # ── Risk metrics ─────────────────────────────────────────────────────
 
 def compute_risk_metrics(equity_series, n_trading_days):
-    """Compute Sharpe, MaxDD, and annualized return from a list of equity values.
-
-    Args:
-        equity_series: list of cumulative equity values (starting at 1.0)
-        n_trading_days: total trading days in the backtest window
-
-    Returns dict with keys: cum_return, ann_return, sharpe, max_drawdown.
-    """
+    """Compute Sharpe, MaxDD, and annualized return from a list of equity values."""
     if len(equity_series) < 2:
         return {"cum_return": 0, "ann_return": 0, "sharpe": 0, "max_drawdown": 0}
 
     cum_ret = equity_series[-1] / equity_series[0] - 1
 
-    # Annualized return (compound)
     if n_trading_days > 0 and equity_series[-1] > 0:
         ann_ret = (equity_series[-1] ** (252 / n_trading_days) - 1)
     else:
         ann_ret = 0
 
-    # Period returns for Sharpe
     period_rets = []
     for i in range(1, len(equity_series)):
         if equity_series[i - 1] > 0:
             period_rets.append(equity_series[i] / equity_series[i - 1] - 1)
 
-    # Sharpe ratio (annualized, rf=0 for simplicity since all strategies share same rf)
     if len(period_rets) >= 2:
         avg_ret = np.mean(period_rets)
         std_ret = np.std(period_rets, ddof=1)
@@ -619,7 +632,6 @@ def compute_risk_metrics(equity_series, n_trading_days):
     else:
         sharpe = 0
 
-    # Maximum drawdown
     peak = equity_series[0]
     max_dd = 0
     for eq in equity_series:
@@ -762,9 +774,12 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
                 merge_vol_into_fundamentals(fundamentals, vol_map)
     else:
         print(f"[fetch] pulling fundamentals for {len(rebalance_date_list)} rebalance dates...")
+        # Pre-load ucode map and vol DB for aligned PE/vol sourcing
+        ucode_map = _load_ucode_map() or {v: k for k, v in code_to_ucode.items() if v}
+        vol_db = _load_vol_db()
         fundamentals = {}
         for i, td in enumerate(rebalance_date_list):
-            fund = fetch_day_fundamentals(codes, td)
+            fund = fetch_day_fundamentals(codes, td, ucode_map, vol_db)
             fundamentals[td] = fund
             n_pe = sum(1 for v in fund.values() if v.get("pe_ttm") is not None)
             n_vol = sum(1 for v in fund.values() if v.get("vol_20d") is not None)
@@ -775,8 +790,10 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
         n_fund = persist_fundamentals_to_db(fundamentals)
         print(f"[persist] wrote {n_px} price rows + {n_fund} fundamental rows to DB")
 
-        pe_map = fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd)
-        merge_pe_into_fundamentals(fundamentals, code_to_ucode, pe_map)
+        # Supplement with bulk PE if still sparse
+        if basic_data is not None:
+            pe_map = fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd)
+            merge_pe_into_fundamentals(fundamentals, code_to_ucode, pe_map)
 
         print("[vol] computing 20-day realized volatility from prices...")
         vol_map = compute_vol_from_prices(prices, trading_dates, rebalance_ymds)
@@ -804,7 +821,7 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
 
 
 def load_benchmark(start_ymd, end_ymd, trading_dates):
-    """Load CSI convertible bond index or fall back to equal-weight."""
+    """Load CSI convertible bond index (000832.CSI) or fall back to equal-weight."""
     bench_prices = {}
     if history is not None:
         print("[bench] fetching CSI convertible index (000832.CSI)...")
@@ -839,10 +856,7 @@ def load_benchmark(start_ymd, end_ymd, trading_dates):
 
 
 def build_day_bonds(prices, fund, td_select):
-    """Build bond snapshot list for a single rebalance date.
-
-    Returns a NEW list of dicts (no mutation of fund or prices).
-    """
+    """Build bond snapshot list for a single rebalance date."""
     day_bonds = []
     for code in prices:
         px = prices[code].get(td_select)
@@ -886,7 +900,6 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
         "bench": "中证转债" if not use_eq_weight_bench else "全市场等权",
     }
 
-    # One Portfolio per strategy
     portfolios = {k: Portfolio(args.slippage_bps, args.commission_bps) for k in STRATEGIES}
     bench_equity = 1.0
     results = []
@@ -905,11 +918,8 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
 
         fund = fundamentals.get(td_select, {})
         day_bonds = build_day_bonds(prices, fund, td_select)
-
-        # Apply universe filter (liquidity + price cap)
         filtered = filter_universe(day_bonds)
 
-        # Strategy selection (pure functions, no side effects)
         dl_codes = select_double_low(filtered, top_n=args.top)
         sn_picks = select_sector_neutral(filtered, per_sector=args.top)
         rv_codes = select_low_rv(filtered, top_n=args.top)
@@ -925,7 +935,6 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
         buy_px = {code: prices[code].get(td_buy) for code in prices if td_buy in prices[code]}
         sell_px = {code: prices[code].get(td_sell) for code in prices if td_sell in prices[code]}
 
-        # Execute rebalance per strategy
         ret = {}
         n_held = {}
         any_valid = False
@@ -941,7 +950,6 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
         if not any_valid:
             continue
 
-        # Benchmark
         if use_eq_weight_bench:
             n_mkt, sum_mkt = 0, 0.0
             for code in prices:
@@ -958,14 +966,12 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
                 bench_equity = bp / bench_base
         equity_history["bench"].append(bench_equity)
 
-        # Emit equity curve point
         pt = {"date": td_sell}
         for k in STRATEGIES:
             pt[f"cum_{k}"] = round(portfolios[k].equity - 1, 6)
         pt["cum_bench"] = round(bench_equity - 1, 6)
         results.append(pt)
 
-        # Log
         parts = []
         for k in STRATEGIES:
             r_val = ret[k]
@@ -1007,7 +1013,7 @@ def print_summary(args, results, equity_history, turnover_history, trading_dates
     print(f"交易成本: 滑点{args.slippage_bps}bps(单边)+佣金{args.commission_bps}bps(往返), 仅换手部分收费")
     print(f"Universe: 余额>={MIN_BALANCE_YI}亿 + 价格<={MAX_PRICE}元 + PE>0 + vol>Q1")
     print(f"最少持仓: {MIN_HOLDINGS}只 (不足则该策略当期N/A)")
-    print(f"分域标准: 偏股(Delta>=0.7) 平衡(0.4<=Delta<0.7) 偏债(Delta<0.4)")
+    print(f"分域标准: 偏股(Delta>=0.6) 平衡(0.3<=Delta<0.6) 偏债(Delta<0.3)")
     print(f"停牌处理: 无卖出价按0%收益计入")
     print(f"{'='*78}")
     print(f"{'策略':<16} {'累计收益':>10} {'年化':>10} {'Sharpe':>8} {'最大回撤':>10} {'平均换手':>10}")
@@ -1118,41 +1124,33 @@ def main():
         print("[warn] iFinD not available, falling back to --from-db mode")
         args.from_db = True
 
-    # 1. Load universe
     codes, code_to_ucode = load_universe_codes(start_ymd, end_ymd)
     codes_set = set(codes)
 
-    # 2. Load prices and dates
     trading_dates, prices = load_prices_and_dates(args, codes, start_ymd, end_ymd)
     if trading_dates is None:
         return
 
-    # 3. Compute rebalance schedule
     rebalance_indices, holding = compute_rebalance_schedule(args, trading_dates, start_ymd, end_ymd)
     rebalance_ymds = set(trading_dates[i] for i in rebalance_indices)
 
-    # 4. Load fundamentals
     fundamentals = load_fundamentals(
         args, codes, codes_set, code_to_ucode, trading_dates,
         rebalance_ymds, prices, start_ymd, end_ymd)
 
-    # 5. Load benchmark
     bench_prices, bench_base, use_eq_weight_bench = load_benchmark(start_ymd, end_ymd, trading_dates)
 
-    # 6. Run backtest
     (results, portfolios, equity_history, turnover_history,
      bench_equity, strategies, labels) = run_backtest_loop(
         args, trading_dates, rebalance_indices, holding,
         prices, fundamentals, bench_prices, bench_base, use_eq_weight_bench)
 
-    # 7. Print summary with risk metrics
     summary_info = print_summary(
         args, results, equity_history, turnover_history,
         trading_dates, holding, strategies, labels, use_eq_weight_bench)
     if summary_info is None:
         return
 
-    # 8. Save output
     save_output(args, summary_info, end_ymd, strategies, use_eq_weight_bench, holding)
 
 

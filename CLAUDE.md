@@ -88,6 +88,14 @@ python3 scripts/backtest_weekly.py --start-date 2026-01-23 --end-date 2026-04-23
 
 Features: multiplicative compounding, configurable slippage/commission, PE>0 + vol>Q1 filters matching live strategy, historical universe from valuation_daily.
 
+## One-Command Refresh (dev-1 only)
+
+```bash
+python3 scripts/daily_refresh.py --trade-date 2026-04-24
+```
+
+Runs the full 8-step pipeline in sequence: fetch_cb_universe → fetch_valuation → refresh_data → compute_volatility → assemble_dataset → bs_pricing → strategy_score → ensure_themes → build_overview_md → backtest_weekly → render_html → validate_snapshot. Each step writes to `etl_runs` table. Supports `--skip-fetch`, `--skip-valuation`, `--skip-vol`, `--skip-backtest` to skip API-dependent steps when re-running with existing data.
+
 ## Data Freshness Check
 
 iFinD bond-side fields (conv_prem_pct, pure_bond_value, maturity_call_price) can return NULL when data hasn't been processed yet (e.g., fetched too early after market close). Use `refresh_data.py` to detect and fix:
@@ -152,8 +160,10 @@ iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
 | `_etl_log.py` | ETL run logging context manager (writes to `etl_runs` table) |
 | `validate_data.py` | Data quality validation (universe size, field completeness, value ranges) |
 | `report_view_model.py` | Dashboard payload builder (normalizes parsed markdown → JSON view model for HTML) |
+| `daily_refresh.py` | One-command end-to-end refresh orchestrator (串行 ETL 入口, writes `etl_runs`) |
+| `validate_snapshot.py` | Snapshot quality check (universe/valuation/vol/themes/strategy row counts + field null rates) |
 
-Archived scripts in `scripts/archive/`: `discover_universe.py`, `generate_themes_with_claude.py`, `load_themes.py`, `sample_one.py`.
+Archived scripts in `scripts/archive/`: `discover_universe.py`, `generate_themes_with_claude.py`, `load_themes.py`, `sample_one.py`, `build_strategy_page.py`.
 
 ### DuckDB Schema (7 tables + indexes)
 

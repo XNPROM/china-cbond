@@ -1,54 +1,43 @@
-# Data & generated reports
+# Data and generated local state
 data/
 *.duckdb
-reports/
-output/
+*.duckdb.wal
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.egg-info/
 .venv/
 
-# iFinD auth
+# iFinD auth and local secrets
 .codex_logs/
+*.token
+.env
 
-# macOS archive junk
-__MACOSX/
-extracted/
-
-# OS
+# OS / IDE
 .DS_Store
 Thumbs.db
-nul
-
-# IDE
 .vscode/
 .idea/
 
-# Claude Code
+# Local agent handoff/progress files
 .claude/
+.claude_progress.md
+.codex_progress.md
+HANDOFF.md
+plan.md
+TODO_*.md
+sample_*.md
+cbond_overview_*.md
+cbond_overview_*.html
+reports/2026-04-20/
+reports/2026-04-22/
+reports/2026-04-23/
 
-# Temp
+# Deprecated remote deploy directory
+docs/
+
+# Temp / extracted files
+__MACOSX/
+extracted/
 _temp_research/
-.env
-*.token
-ifindfunction.docx
-.playwright-mcp/
-
-# Theme classification temp files
-themes_claude_progress*.jsonl
-themes_codex_progress.jsonl
-themes_rewrite_progress.jsonl
-themes_rules_backup.jsonl
-themes_*_progress.jsonl
-
-# Backtest outputs (keep only latest)
-backtest_*.json
-
-# Test cache
-.pytest_cache/
-
-# Superpowers docs (internal)
-docs/superpowers/
