@@ -164,7 +164,7 @@
         <div class="bond-card-head">
           <div>
             <div class="bond-card-top">
-              <span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "未分域")}</span>
+              <span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "偏债")}</span>
               <span class="pill">${escapeHtml(item.theme_group)}</span>
             </div>
             <h3>${highlightText(item.bond_name, state.query)}</h3>
@@ -181,8 +181,16 @@
             <strong class="stat-value">${escapeHtml(metricText(item.conv))}</strong>
           </div>
           <div class="stat-box">
+            <span class="stat-label">纯债溢价</span>
+            <strong class="stat-value">${escapeHtml(metricText(item.pure))}</strong>
+          </div>
+          <div class="stat-box">
             <span class="stat-label">相对价值</span>
             <strong class="stat-value ${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</strong>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">隐含波动率</span>
+            <strong class="stat-value">${escapeHtml(metricText(item.implied_vol))}</strong>
           </div>
           <div class="stat-box">
             <span class="stat-label">Delta</span>
@@ -190,9 +198,9 @@
           </div>
         </div>
         <div class="bond-card-flags">
-          <span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "强赎状态未知")}</span>
-          ${item.down_status.text ? `<span class="status-pill ${stateClass(item.down_status.state)}">${escapeHtml(item.down_status.text)}</span>` : ""}
-          ${item.strategy ? `<span class="status-pill note">${escapeHtml(item.strategy)}</span>` : ""}
+          ${item.call_status.text ? `<span class="status-pill ${stateClass(item.call_status.state)}">&#9888; ${escapeHtml(item.call_status.text)}</span>` : '<span class="status-pill safe">&#10003; 未触发强赎</span>'}
+          ${item.down_status.text ? `<span class="status-pill ${stateClass(item.down_status.state)}">&#8595; ${escapeHtml(item.down_status.text)}</span>` : ""}
+          ${item.strategy ? `<span class="status-pill note">&#9733; ${escapeHtml(item.strategy)}</span>` : ""}
         </div>
         <div class="bond-card-tags">
           ${(item.themes || []).slice(0, 4).map(theme => `<span class="theme-pill">${escapeHtml(theme)}</span>`).join("")}
@@ -217,7 +225,9 @@
         <td>${escapeHtml(item.theme_group)}</td>
         <td>
           <div class="bond-card-flags">
-            <span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "无")}</span>
+            ${item.call_status.text
+              ? `<span class="status-pill ${stateClass(item.call_status.state)}">&#9888; ${escapeHtml(item.call_status.text)}</span>`
+              : '<span class="status-pill safe">&#10003;</span>'}
           </div>
         </td>
       </tr>
@@ -334,9 +344,11 @@
         <dl class="drawer-kv-grid">
           <div class="drawer-kv-row">
             <dt>强赎</dt>
-            <dd><span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "无")}</span></dd>
+            <dd>${item.call_status.text
+              ? `<span class="status-pill ${stateClass(item.call_status.state)}">&#9888; ${escapeHtml(item.call_status.text)}</span>`
+              : '<span class="status-pill safe">&#10003; 未触发</span>'}</dd>
           </div>
-          ${item.down_status.text ? `<div class="drawer-kv-row"><dt>下修</dt><dd><span class="status-pill ${stateClass(item.down_status.state)}">${escapeHtml(item.down_status.text)}</span></dd></div>` : ""}
+          ${item.down_status.text ? `<div class="drawer-kv-row"><dt>下修</dt><dd><span class="status-pill ${stateClass(item.down_status.state)}">&#8595; ${escapeHtml(item.down_status.text)}</span></dd></div>` : ""}
           <div class="drawer-kv-row">
             <dt>评级</dt>
             <dd>${escapeHtml(item.rating || "--")}</dd>
@@ -419,7 +431,6 @@
         value: [
           toNumber(item.conv) || 0,
           toNumber(item.price) || 0,
-          Math.max(14, Math.min(38, (toNumber(item.balance) || 0) * 1.7)),
           toNumber(item.relative_value) || 0,
         ],
         bondCode: item.bond_code,
@@ -430,13 +441,12 @@
         convText: metricText(item.conv),
         rvText: metricText(item.relative_value),
         deltaText: metricText(item.delta),
-        balanceText: metricText(item.balance),
       });
     });
 
     // Find lowest-RV bond for annotation
     const allScatter = [...groups.undervalued, ...groups.fair, ...groups.expensive];
-    const lowestRv = allScatter.filter(d => d.value[3] > 0).sort((a, b) => a.value[3] - b.value[3])[0];
+    const lowestRv = allScatter.filter(d => d.value[2] > 0).sort((a, b) => a.value[2] - b.value[2])[0];
     const markPointData = lowestRv ? [{
       coord: [lowestRv.value[0], lowestRv.value[1]],
       symbol: "pin",
@@ -458,10 +468,9 @@
           const data = params.data;
           return [
             `<strong>${escapeHtml(data.bondName)}</strong>`,
-            `${escapeHtml(data.themeGroup)} · ${escapeHtml(data.sector || "未分域")}`,
+            `${escapeHtml(data.themeGroup)}${data.sector ? " · " + escapeHtml(data.sector) : ""}`,
             `价格 ${escapeHtml(data.priceText)} / 转股溢价 ${escapeHtml(data.convText)}`,
             `RV ${escapeHtml(data.rvText)} / Delta ${escapeHtml(data.deltaText)}`,
-            `余额 ${escapeHtml(data.balanceText)} 亿`,
           ].join("<br>");
         },
       },
@@ -484,7 +493,7 @@
           name: "低估",
           type: "scatter",
           data: groups.undervalued,
-          symbolSize: value => value[2],
+          symbolSize: 10,
           itemStyle: { color: "#1d7a46", opacity: 0.86 },
           markPoint: { data: markPointData, animation: false },
         },
@@ -492,14 +501,14 @@
           name: "合理",
           type: "scatter",
           data: groups.fair,
-          symbolSize: value => value[2],
+          symbolSize: 10,
           itemStyle: { color: "#4b5563", opacity: 0.74 },
         },
         {
           name: "偏贵",
           type: "scatter",
           data: groups.expensive,
-          symbolSize: value => value[2],
+          symbolSize: 10,
           itemStyle: { color: "#c2410c", opacity: 0.8 },
         },
       ],
