@@ -1,6 +1,6 @@
 # China CBond Monitor — 可转债全景扫描
 
-全市场可转债（~335只）全景扫描系统。每日自动抓取行情、计算 BS 定价与希腊字母、运行多策略选券、按题材分组，生成一份浅色研究工作台风格的交互式 HTML 报告并通过 GitHub Pages 发布。
+全市场可转债（~335只）全景扫描系统。每日自动抓取行情、计算 BS 定价与希腊字母、运行多策略选券、按题材分组，生成一份暗色主题交互式 HTML 仪表盘（支持亮色切换）并通过 GitHub Pages 发布。
 
 ## 报告预览
 
@@ -11,7 +11,7 @@
 ```
 iFinD API ──→ raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
                     ↓
-               DuckDB (data/cbond.duckdb) ← 6 张表 + 索引
+               DuckDB (data/cbond.duckdb) ← 7 张表 + 索引
                     ↓
          assemble_dataset.py (SQL JOIN) → dataset.json
                     ↓
@@ -109,11 +109,16 @@ python scripts/fetch_cb_universe.py --date 20260424
 | `strategy_score.py` | 双低(Top30) + 分域双低(偏股/平衡/偏债各Top10) + 低估(Top10) | 即时 |
 | `generate_themes_direct.py` | 基于正股简介的关键词规则题材分类 | 即时 |
 | `build_overview_md.py` | 读取 DB 中的策略与题材数据，生成结构化 Markdown | 即时 |
-| `render_html.py` | Markdown → 交互式 HTML 报告（排序、筛选、导出 CSV） | 即时 |
-| `discover_universe.py` | 从种子代码 + 区间探测发现全市场可转债 | ~2-3min |
+| `render_html.py` | Markdown → 交互式暗色仪表盘 HTML（Jinja2 + ECharts + 排序筛选导出） | 即时 |
+| `backtest_weekly.py` | 周度再平衡回测引擎（含 T+1 入场、滑点、佣金） | ~4min |
+| `fetch_cb_universe.py` | 通过 data_pool p05479 一次性拉取全市场可转债 + 申万行业 | ~30s |
 | `fetch_underlying_profile.py` | 抓取正股公司简介文本 | ~1min |
 | `init_db.py` | 初始化 DuckDB schema | 即时 |
 | `backfill.py` | 从 raw 目录回填历史数据到 DB | 即时 |
+| `refresh_data.py` | 数据新鲜度检测 + iFinD 重新拉取过期字段 | ~2min |
+| `validate_data.py` | 数据质量校验（universe 规模、字段完整度、值域范围） | 即时 |
+| `_etl_log.py` | ETL 运行日志上下文管理器（写入 etl_runs 表） | — |
+| `report_view_model.py` | 仪表盘载荷构建器（解析 Markdown → JSON view model） | — |
 
 ## 共享基础设施 (`scripts/_*.py`)
 
@@ -123,7 +128,7 @@ python scripts/fetch_cb_universe.py --date 20260424
 | `_ifind.py` | iFinD HTTP 接口封装：`basic_data_service`、`real_time_quotation`、`cmd_history_quotation`，含 `batched()` 批量助手 |
 | `_db.py` | DuckDB 连接 (`data/cbond.duckdb`)、`init_schema()`、通用 `upsert()` ON CONFLICT DO UPDATE |
 
-## DuckDB 数据库设计（7 张表）
+## DuckDB 数据库设计（7 张表 + 索引）
 
 ### universe — 券种静态信息
 
@@ -289,14 +294,15 @@ BS 看涨期权价值 = S·N(d1) - K·e^(-rT)·N(d2)
 
 ## HTML 报告功能
 
-- **浅色研究面板**：改为浅底、纸面感、信息分区明确的工作台式布局，不再使用黑底后台风格
-- **市场雷达**：首屏散点图同时展示价格、转股溢价、相对价值和余额，支持点选标的
-- **策略观察区**：双低、分域双低、低估榜单以卡片化策略面板呈现
-- **双视图工作台**：支持卡片视图 / 数据表切换，适合不同浏览习惯
-- **详情抽屉**：点击标的可直接查看主营、题材、状态、关键指标和时序片段
-- **快速筛选**：低估、低溢价、高 Delta、强赎触发、百元以下等快捷筛选
-- **搜索与排序**：支持转债名、正股名、代码、题材、主营搜索，并支持核心字段排序
-- **导出能力**：复制当前过滤结果代码，或导出当前可见券种为 CSV
+- **暗色仪表盘**：暗色主题交互式仪表盘（支持亮色切换，localStorage 持久化）
+- **KPI 概览卡**：总数、均价、中位溢价率、中位相对价值、低估数、板块分布
+- **列排序**：点击表头排序（升序 → 降序 → 默认）
+- **回测净值曲线**：ECharts 绘制周度再平衡策略净值曲线（含 dataZoom）
+- **SVG 迷你图**：Delta 和相对价值趋势 sparkline
+- **筛选**：文本搜索、题材下拉、快捷筛选按钮
+- **导出**：导出 CSV / 复制代码
+- **板块徽章**：板块色标、相对价值色彩编码、强赎/下修状态徽章
+- **移动端适配**：<640px 自动切换卡片布局
 
 ## GitHub Pages 自动部署
 
@@ -306,7 +312,7 @@ BS 看涨期权价值 = S·N(d1) - K·e^(-rT)·N(d2)
 
 | 项目 | 说明 |
 |---|---|
-| Python | 3.9+，仅 stdlib + `duckdb`，无 pandas/numpy |
+| Python | 3.9+，stdlib + `duckdb` + `jinja2`，无 pandas/numpy |
 | 数据源 | iFinD 量化 API (同花顺) |
 | 数据库 | DuckDB 单文件 (`data/cbond.duckdb`) |
 | 目录 | `data/raw/asof=YYYY-MM-DD/` 存原始快照，`reports/YYYY-MM-DD/` 存输出 |
@@ -317,7 +323,8 @@ BS 看涨期权价值 = S·N(d1) - K·e^(-rT)·N(d2)
 ## 已知限制
 
 - iFinD `ths_concept_*` 字段全部返回 ERR，无法获取结构化概念/板块数据，题材分类依赖正股简介文本
-- 无单一 API 列出全市场可转债，依赖种子代码 + 区间探测 (`discover_universe.py --probe`)，新上市券可能遗漏
 - 余额为 0 的券视为已退市（强制赎回）
 - 新上市不足 20 个交易日的券波动率样本不足，`vol_daily.n_samples` 可供判断
 - Anaconda Python 与 iFinD 存在 SSL 握手问题，建议使用系统 Python
+- BS 定价模型未包含赎回条款和下修条款，偏股型转债理论价值偏高
+- 回测依赖历史 valuation_daily 数据的 PE/vol 字段，若历史数据缺失则双低策略可能选不出券

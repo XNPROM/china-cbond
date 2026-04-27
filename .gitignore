@@ -43,3 +43,9 @@ themes_*_progress.jsonl
 
 # Backtest outputs (keep only latest)
 backtest_*.json
+
+# Test cache
+.pytest_cache/
+
+# Superpowers docs (internal)
+docs/superpowers/
