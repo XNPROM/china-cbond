@@ -12,6 +12,7 @@
     category: "",
     quick: "all",
     view: "cards",
+    density: "reading",
     sortKey: "relative_value",
     sortDir: "asc",
     selectedCode: null,
@@ -55,6 +56,8 @@
 
   function signedClass(metric) {
     const value = typeof metric === "object" ? metric.class_name : "";
+    if (value === "up") return "is-positive";
+    if (value === "down") return "is-negative";
     if (value) return value;
     const num = toNumber(metric);
     if (num == null || num === 0) return "";
@@ -88,12 +91,20 @@
     return !state.category || item.category === state.category;
   }
 
+  function parseCallDays(item) {
+    const text = (item.call_status || {}).text || "";
+    const m = text.match(/(\d+)\s*\/\s*\d+/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
   function matchesQuick(item) {
     if (state.quick === "all") return true;
     if (state.quick === "undervalued") return toNumber(item.relative_value) != null && toNumber(item.relative_value) < 1.0;
     if (state.quick === "lowPremium") return toNumber(item.conv) != null && toNumber(item.conv) < 20;
     if (state.quick === "highDelta") return toNumber(item.delta) != null && toNumber(item.delta) >= 0.75;
     if (state.quick === "callRisk") return ["warn", "danger"].includes((item.call_status || {}).state);
+    if (state.quick === "callGt10") { const d = parseCallDays(item); return d != null && d > 10; }
+    if (state.quick === "callLe10") { const d = parseCallDays(item); return d != null && d <= 10; }
     if (state.quick === "lowPrice") return toNumber(item.price) != null && toNumber(item.price) < 100;
     return true;
   }
@@ -158,6 +169,24 @@
     ].join("");
   }
 
+  function renderCompactRow(item) {
+    const chgClass = signedClass(item.day_chg);
+    return `
+      <div class="compact-row" data-open-code="${escapeHtml(item.bond_code)}">
+        <span class="compact-row-name">${highlightText(item.bond_name, state.query)}</span>
+        <span class="compact-row-code">${escapeHtml(item.bond_code)}</span>
+        <span class="compact-row-item"><span class="compact-row-v ${chgClass}">${escapeHtml(metricText(item.price))}</span></span>
+        <span class="compact-row-item"><span class="compact-row-v ${chgClass}">${escapeHtml(metricText(item.day_chg))}</span></span>
+        <span class="compact-row-item"><span class="compact-row-v">${escapeHtml(metricText(item.conv))}</span></span>
+        <span class="compact-row-item"><span class="compact-row-v">${escapeHtml(metricText(item.vol))}</span></span>
+        <span class="compact-row-item"><span class="compact-row-v">${escapeHtml(metricText(item.relative_value))}</span></span>
+        <span class="compact-row-item"><span class="compact-row-v">${escapeHtml(metricText(item.delta))}</span></span>
+        <span class="compact-row-item"><span class="compact-row-v">${escapeHtml(metricText(item.balance))}</span></span>
+        <span class="compact-row-item"><span class="compact-row-v">${escapeHtml(item.call_status.text || "—")}</span></span>
+        <span class="compact-row-tags">${(item.themes || []).slice(0, 3).map(t => `<span class="compact-row-tag">${escapeHtml(t)}</span>`).join("")}</span>
+      </div>`;
+  }
+
   function renderCard(item) {
     return `
       <article class="bond-card" data-open-code="${escapeHtml(item.bond_code)}">
@@ -175,6 +204,10 @@
           <div class="stat-box">
             <span class="stat-label">价格</span>
             <strong class="stat-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</strong>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">涨跌幅</span>
+            <strong class="stat-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.day_chg))}</strong>
           </div>
           <div class="stat-box">
             <span class="stat-label">转股溢价</span>
@@ -214,7 +247,9 @@
           <div class="table-meta">${escapeHtml(item.bond_code)} · ${highlightText(item.stock_name, state.query)}</div>
         </td>
         <td><span class="table-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</span></td>
+        <td><span class="table-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.day_chg))}</span></td>
         <td><span class="table-value">${escapeHtml(metricText(item.conv))}</span></td>
+        <td><span class="table-value">${escapeHtml(metricText(item.pure))}</span></td>
         <td><span class="table-value ${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</span></td>
         <td><span class="table-value">${escapeHtml(metricText(item.delta))}</span></td>
         <td><span class="table-value">${escapeHtml(metricText(item.balance))}</span></td>
@@ -235,7 +270,26 @@
     if (!view) return;
     view.hidden = state.view !== "cards";
     if (state.view !== "cards") return;
-    view.innerHTML = items.map(renderCard).join("");
+    if (state.density === "compact") {
+      const header = `<div class="compact-header">
+        <span class="ch-name">转债</span>
+        <span class="ch-code">代码</span>
+        <span class="ch-item">价格</span>
+        <span class="ch-item">涨跌</span>
+        <span class="ch-item">溢价率</span>
+        <span class="ch-item">波动率</span>
+        <span class="ch-item">相对价值</span>
+        <span class="ch-item">Delta</span>
+        <span class="ch-item">余额</span>
+        <span class="ch-item">强赎</span>
+        <span class="ch-tags">题材</span>
+      </div>`;
+      view.innerHTML = header + items.map(renderCompactRow).join("");
+      view.classList.add("is-compact");
+    } else {
+      view.innerHTML = items.map(renderCard).join("");
+      view.classList.remove("is-compact");
+    }
   }
 
   function renderTable(items) {
@@ -606,6 +660,13 @@
     $$(".bond-table th[data-sort-key]").forEach(th => {
       th.classList.toggle("is-sorted", th.dataset.sortKey === state.sortKey);
     });
+    const sel = $("#sortSelect");
+    if (sel) {
+      const combo = `${state.sortKey}:${state.sortDir}`;
+      if ([...sel.options].some(o => o.value === combo)) {
+        sel.value = combo;
+      }
+    }
     render();
   }
 
@@ -713,6 +774,14 @@
       render();
     });
 
+    $("#sortSelect")?.addEventListener("change", event => {
+      const val = event.target.value;
+      const [key, dir] = val.split(":");
+      state.sortKey = key;
+      state.sortDir = dir || "asc";
+      render();
+    });
+
     $$(".quick-chip").forEach(button => {
       button.addEventListener("click", () => {
         state.quick = button.dataset.quick || "all";
@@ -725,6 +794,14 @@
       button.addEventListener("click", () => {
         state.view = button.dataset.view || "cards";
         $$(".view-btn").forEach(node => node.classList.toggle("is-active", node === button));
+        render();
+      });
+    });
+
+    $$(".density-btn").forEach(button => {
+      button.addEventListener("click", () => {
+        state.density = button.dataset.density || "reading";
+        $$(".density-btn").forEach(node => node.classList.toggle("is-active", node === button));
         render();
       });
     });

@@ -196,6 +196,10 @@
             <button type="button" class="view-btn is-active" data-view="cards">卡片视图</button>
             <button type="button" class="view-btn" data-view="table">数据表</button>
           </div>
+          <div class="view-switch" role="tablist" aria-label="卡片密度">
+            <button type="button" class="density-btn is-active" data-density="reading">阅读</button>
+            <button type="button" class="density-btn" data-density="compact">紧凑</button>
+          </div>
         </div>
 
         <div class="toolbar">
@@ -221,6 +225,25 @@
               {% endfor %}
             </select>
           </label>
+          <label class="field">
+            <span>排序</span>
+            <select id="sortSelect">
+              <option value="relative_value:asc">相对价值 ↑</option>
+              <option value="relative_value:desc">相对价值 ↓</option>
+              <option value="price:asc">价格 低→高</option>
+              <option value="price:desc">价格 高→低</option>
+              <option value="day_chg:desc">涨跌幅 高→低</option>
+              <option value="day_chg:asc">涨跌幅 低→高</option>
+              <option value="conv:asc">转股溢价率 低→高</option>
+              <option value="conv:desc">转股溢价率 高→低</option>
+              <option value="pure:asc">纯债溢价率 低→高</option>
+              <option value="pure:desc">纯债溢价率 高→低</option>
+              <option value="delta:desc">Delta 高→低</option>
+              <option value="delta:asc">Delta 低→高</option>
+              <option value="balance:desc">余额 大→小</option>
+              <option value="bond_name:asc">名称 A→Z</option>
+            </select>
+          </label>
           <div class="toolbar-actions">
             <button class="toolbar-btn" id="copyCodes" type="button">复制代码</button>
             <button class="toolbar-btn" id="exportCsv" type="button">导出 CSV</button>
@@ -233,6 +256,8 @@
           <button class="quick-chip" type="button" data-quick="lowPremium">低溢价</button>
           <button class="quick-chip" type="button" data-quick="highDelta">高 Delta</button>
           <button class="quick-chip" type="button" data-quick="callRisk">强赎触发</button>
+          <button class="quick-chip" type="button" data-quick="callGt10">强赎 &gt; 10天</button>
+          <button class="quick-chip" type="button" data-quick="callLe10">强赎 &le; 10天</button>
           <button class="quick-chip" type="button" data-quick="lowPrice">百元以下</button>
         </div>
 
@@ -252,7 +277,9 @@
                 <tr>
                   <th data-sort-key="bond_name">转债</th>
                   <th data-sort-key="price">价格</th>
+                  <th data-sort-key="day_chg">涨跌</th>
                   <th data-sort-key="conv">转股溢价</th>
+                  <th data-sort-key="pure">纯债溢价</th>
                   <th data-sort-key="relative_value">相对价值</th>
                   <th data-sort-key="delta">Delta</th>
                   <th data-sort-key="balance">余额(亿)</th>
