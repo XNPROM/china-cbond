@@ -1,6 +1,8 @@
-# Data
+# Data & generated reports
 data/
 *.duckdb
+reports/
+output/
 
 # Python
 __pycache__/
@@ -20,9 +22,6 @@ extracted/
 .DS_Store
 Thumbs.db
 nul
-
-# Temp output
-output/
 
 # IDE
 .vscode/
