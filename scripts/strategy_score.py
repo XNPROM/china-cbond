@@ -107,7 +107,7 @@ def main():
     # --- Strategy 2: Sector-neutral double-low (classified by BS Delta) ---
     sector_groups = {"偏股": [], "平衡": [], "偏债": []}
     for r in candidates:
-        s = _classify_sector(r["bs_delta"])
+        s = _classify_sector(r.get("bs_delta"))
         sector_groups[s].append(r)
 
     sector_picks = []

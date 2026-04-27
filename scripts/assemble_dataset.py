@@ -49,7 +49,8 @@ SELECT
   vd.vol_20d_pct   AS vol_20d,
   vd.n_samples     AS vol_n,
   p.main_business  AS profile,
-  p.industry
+  p.industry,
+  u.list_date
 FROM universe u
 JOIN valuation_daily v  ON u.code  = v.code  AND v.trade_date = ?
 LEFT JOIN vol_daily vd  ON u.ucode = vd.ucode AND vd.trade_date = ?
@@ -70,6 +71,12 @@ def main():
     con.close()
 
     items = [dict(zip(cols, row)) for row in rows]
+    # Filter out unlisted bonds (list_date IS NULL means not yet listed)
+    before = len(items)
+    items = [it for it in items if it.get("list_date")]
+    unlisted = before - len(items)
+    if unlisted:
+        print(f"[filter] excluded {unlisted} unlisted bonds (list_date IS NULL)")
     # Filter out force-redeemed bonds (redemp_stop_date <= trade_date means already stopped trading)
     before = len(items)
     items = [it for it in items if not (it.get("redemp_stop_date") and it["redemp_stop_date"] <= args.trade_date.replace("-", ""))]
