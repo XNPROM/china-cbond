@@ -6,6 +6,7 @@ data/
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 .venv/
 
 # iFinD auth
@@ -32,3 +33,13 @@ _temp_research/
 *.token
 ifindfunction.docx
 .playwright-mcp/
+
+# Theme classification temp files
+themes_claude_progress*.jsonl
+themes_codex_progress.jsonl
+themes_rewrite_progress.jsonl
+themes_rules_backup.jsonl
+themes_*_progress.jsonl
+
+# Backtest outputs (keep only latest)
+backtest_*.json

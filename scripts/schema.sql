@@ -88,7 +88,19 @@ CREATE TABLE IF NOT EXISTS themes (
   PRIMARY KEY (trade_date, code)
 );
 
+CREATE TABLE IF NOT EXISTS etl_runs (
+  run_id       TEXT PRIMARY KEY,
+  trade_date   TEXT,
+  step         TEXT,
+  started_at   TEXT,
+  finished_at  TEXT,
+  row_count    INTEGER,
+  status       TEXT,
+  note         TEXT
+);
+
 -- Secondary indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_val_code_date ON valuation_daily(code, trade_date);
 CREATE INDEX IF NOT EXISTS idx_strat_date_strat ON strategy_picks(trade_date, strategy);
 CREATE INDEX IF NOT EXISTS idx_vol_ucode_date ON vol_daily(ucode, trade_date);
+CREATE INDEX IF NOT EXISTS idx_etl_date ON etl_runs(trade_date, step);

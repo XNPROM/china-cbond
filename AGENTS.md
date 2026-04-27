@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -196,23 +196,6 @@ Indexes: `idx_val_code_date`, `idx_strat_date_strat`, `idx_vol_ucode_date`, `idx
 - Mobile-responsive (card layout <640px)
 
 Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in `scripts/static/style.css`, JS in `scripts/static/app.js`, both inlined at render time. Bond data in `window.__CBOND_DATA__` JSON (replaces data-* attributes).
-
-## Testing
-
-Tests use `unittest` (no pytest dependency). All test files are in `tests/`.
-
-```bash
-# Run all tests
-python -m pytest tests/
-
-# Run a single test file
-python -m unittest tests/test_bs_pricing.py
-
-# Run a single test case
-python -m unittest tests.test_bs_pricing.BSCallTests.test_typical_cbond_pricing
-```
-
-Test files: `test_bs_pricing.py` (BS model + Greeks), `test_strategy_score.py` (double-low scoring + sector classification), `test_render_markdown_parser.py`, `test_report_view_model.py`. All tests import from `scripts/` via `sys.path.insert`.
 
 ## Key Conventions
 

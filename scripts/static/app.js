@@ -32,6 +32,13 @@
       .replace(/'/g, "&#39;");
   }
 
+  function highlightText(text, query) {
+    if (!query || !text) return escapeHtml(text);
+    const escaped = escapeHtml(text);
+    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+    return escaped.replace(regex, '<mark class="search-highlight">$1</mark>');
+  }
+
   function toNumber(metric) {
     if (metric == null) return null;
     if (typeof metric === "number") return Number.isFinite(metric) ? metric : null;
@@ -160,8 +167,8 @@
               <span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "未分域")}</span>
               <span class="pill">${escapeHtml(item.theme_group)}</span>
             </div>
-            <h3>${escapeHtml(item.bond_name)}</h3>
-            <p class="bond-card-sub">${escapeHtml(item.stock_name)} · ${escapeHtml(item.industry || "行业待补充")} · ${escapeHtml(item.bond_code)}</p>
+            <h3>${highlightText(item.bond_name, state.query)}</h3>
+            <p class="bond-card-sub">${highlightText(item.stock_name, state.query)} · ${escapeHtml(item.industry || "行业待补充")} · ${escapeHtml(item.bond_code)}</p>
           </div>
         </div>
         <div class="bond-card-stats">
@@ -199,8 +206,8 @@
     return `
       <tr class="table-row" data-open-code="${escapeHtml(item.bond_code)}">
         <td>
-          <strong>${escapeHtml(item.bond_name)}</strong>
-          <div class="table-meta">${escapeHtml(item.bond_code)} · ${escapeHtml(item.stock_name)}</div>
+          <strong>${highlightText(item.bond_name, state.query)}</strong>
+          <div class="table-meta">${escapeHtml(item.bond_code)} · ${highlightText(item.stock_name, state.query)}</div>
         </td>
         <td><span class="table-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</span></td>
         <td><span class="table-value">${escapeHtml(metricText(item.conv))}</span></td>
@@ -600,6 +607,23 @@
     }
   }
 
+  function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function initScrollToTopButton() {
+    const btn = document.createElement("button");
+    btn.className = "scroll-top-btn";
+    btn.innerHTML = "&uarr;";
+    btn.title = "回到顶部 (快捷键: t)";
+    btn.addEventListener("click", scrollToTop);
+    document.body.appendChild(btn);
+
+    window.addEventListener("scroll", () => {
+      btn.classList.toggle("visible", window.scrollY > 400);
+    }, { passive: true });
+  }
+
   function initControls() {
     $("#searchInput")?.addEventListener("input", event => {
       state.query = String(event.target.value || "")
@@ -649,6 +673,14 @@
 
     document.addEventListener("keydown", event => {
       if (event.key === "Escape") closeDetail();
+      // Keyboard shortcuts
+      if (event.key === "/" && !event.target.matches("input, textarea, select")) {
+        event.preventDefault();
+        $("#searchInput")?.focus();
+      }
+      if (event.key === "t" && !event.target.matches("input, textarea, select")) {
+        scrollToTop();
+      }
     });
 
     $$(".bond-table th[data-sort-key]").forEach(th => {
@@ -661,6 +693,7 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     initControls();
+    initScrollToTopButton();
     renderBacktest();
     render();
   });

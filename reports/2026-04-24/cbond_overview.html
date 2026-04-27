@@ -939,6 +939,63 @@ body::before {
     max-height: calc(100vh - 20px);
   }
 }
+
+/* Search highlight */
+.search-highlight {
+  background: rgba(250, 219, 99, 0.35);
+  padding: 0 2px;
+  border-radius: 3px;
+  color: inherit;
+}
+
+/* Scroll to top button */
+.scroll-top-btn {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(29, 78, 216, 0.3);
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.25s ease, transform 0.25s ease, background 0.18s ease;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.scroll-top-btn.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.scroll-top-btn:hover {
+  background: var(--accent-strong);
+  transform: translateY(-2px);
+}
+
+.scroll-top-btn:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 760px) {
+  .scroll-top-btn {
+    bottom: 16px;
+    right: 16px;
+    width: 42px;
+    height: 42px;
+    font-size: 18px;
+  }
+}
 </style>
 </head>
 <body>
@@ -2144,6 +2201,13 @@ body::before {
       .replace(/'/g, "&#39;");
   }
 
+  function highlightText(text, query) {
+    if (!query || !text) return escapeHtml(text);
+    const escaped = escapeHtml(text);
+    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+    return escaped.replace(regex, '<mark class="search-highlight">$1</mark>');
+  }
+
   function toNumber(metric) {
     if (metric == null) return null;
     if (typeof metric === "number") return Number.isFinite(metric) ? metric : null;
@@ -2272,8 +2336,8 @@ body::before {
               <span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "未分域")}</span>
               <span class="pill">${escapeHtml(item.theme_group)}</span>
             </div>
-            <h3>${escapeHtml(item.bond_name)}</h3>
-            <p class="bond-card-sub">${escapeHtml(item.stock_name)} · ${escapeHtml(item.industry || "行业待补充")} · ${escapeHtml(item.bond_code)}</p>
+            <h3>${highlightText(item.bond_name, state.query)}</h3>
+            <p class="bond-card-sub">${highlightText(item.stock_name, state.query)} · ${escapeHtml(item.industry || "行业待补充")} · ${escapeHtml(item.bond_code)}</p>
           </div>
         </div>
         <div class="bond-card-stats">
@@ -2311,8 +2375,8 @@ body::before {
     return `
       <tr class="table-row" data-open-code="${escapeHtml(item.bond_code)}">
         <td>
-          <strong>${escapeHtml(item.bond_name)}</strong>
-          <div class="table-meta">${escapeHtml(item.bond_code)} · ${escapeHtml(item.stock_name)}</div>
+          <strong>${highlightText(item.bond_name, state.query)}</strong>
+          <div class="table-meta">${escapeHtml(item.bond_code)} · ${highlightText(item.stock_name, state.query)}</div>
         </td>
         <td><span class="table-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</span></td>
         <td><span class="table-value">${escapeHtml(metricText(item.conv))}</span></td>
@@ -2712,6 +2776,23 @@ body::before {
     }
   }
 
+  function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function initScrollToTopButton() {
+    const btn = document.createElement("button");
+    btn.className = "scroll-top-btn";
+    btn.innerHTML = "&uarr;";
+    btn.title = "回到顶部 (快捷键: t)";
+    btn.addEventListener("click", scrollToTop);
+    document.body.appendChild(btn);
+
+    window.addEventListener("scroll", () => {
+      btn.classList.toggle("visible", window.scrollY > 400);
+    }, { passive: true });
+  }
+
   function initControls() {
     $("#searchInput")?.addEventListener("input", event => {
       state.query = String(event.target.value || "")
@@ -2761,6 +2842,14 @@ body::before {
 
     document.addEventListener("keydown", event => {
       if (event.key === "Escape") closeDetail();
+      // Keyboard shortcuts
+      if (event.key === "/" && !event.target.matches("input, textarea, select")) {
+        event.preventDefault();
+        $("#searchInput")?.focus();
+      }
+      if (event.key === "t" && !event.target.matches("input, textarea, select")) {
+        scrollToTop();
+      }
     });
 
     $$(".bond-table th[data-sort-key]").forEach(th => {
@@ -2773,6 +2862,7 @@ body::before {
 
   document.addEventListener("DOMContentLoaded", () => {
     initControls();
+    initScrollToTopButton();
     renderBacktest();
     render();
   });
