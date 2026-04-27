@@ -147,7 +147,8 @@ def main():
         print(f"[sector] {sector_name}: {n_sector} candidates, top {len(top_s)}")
 
     # --- Strategy 3: Relative value (低估策略) ---
-    # Read relative_value from DB (written by bs_pricing.py)
+    # Uses a BROADER candidate pool than double-low (no PE>0 filter)
+    # because a bond can be undervalued (low RV) regardless of underlying PE
     rv_picks = []
     try:
         con = connect()
@@ -159,9 +160,17 @@ def main():
         con.close()
         rv_map = {r[0]: r[1] for r in rv_rows}
 
-        rv_candidates = [r for r in candidates if rv_map.get(r["code"]) is not None and 0.5 <= rv_map[r["code"]] <= 2.0]
-        if rv_candidates:
-            rv_sorted = sorted(rv_candidates, key=lambda r: rv_map[r["code"]])
+        # Broader pool: only require price, conv_prem, balance>0, and valid RV
+        rv_pool = [
+            r for r in items
+            if r.get("conv_prem") is not None
+            and r.get("latest") is not None
+            and r.get("balance") is not None and r["balance"] > 0
+            and rv_map.get(r["code"]) is not None
+            and 0.5 <= rv_map[r["code"]] <= 2.0
+        ]
+        if rv_pool:
+            rv_sorted = sorted(rv_pool, key=lambda r: rv_map[r["code"]])
             for i, r in enumerate(rv_sorted[:args.sector_top]):
                 rv = rv_map[r["code"]]
                 rv_picks.append({
@@ -181,7 +190,7 @@ def main():
                     "strategy": "低估",
                     "note": f"相对价值{rv:.2f}，转股溢价率{r['conv_prem']:.1f}%"
                 })
-            print(f"[rv] 低估: {len(rv_candidates)} candidates, top {len(rv_picks)}")
+            print(f"[rv] 低估: {len(rv_pool)} candidates, top {len(rv_picks)}")
     except Exception as e:
         print(f"[warn] Could not read relative_value from DB: {e}")
         print("[warn] Skipping 低估 strategy — run bs_pricing.py first")
