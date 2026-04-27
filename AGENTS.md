@@ -83,10 +83,16 @@ Uses iFinD `data_pool` p05479 endpoint — returns all listed CBs with Shenwan i
 ## Backtest (weekly rebalance + T+1 entry)
 
 ```bash
+# Via iFinD API (fetches prices + fundamentals, persists to DB)
 python3 scripts/backtest_weekly.py --start-date 2026-01-23 --end-date 2026-04-23
+
+# Via DB only (fast, requires pre-populated valuation_daily with PE data)
+python3 scripts/backtest_weekly.py --start-date 2026-01-23 --end-date 2026-04-23 --from-db
 ```
 
-Features: multiplicative compounding, configurable slippage/commission, PE>0 + vol>Q1 filters matching live strategy, historical universe from valuation_daily.
+Features: multiplicative compounding, configurable slippage/commission, PE>0 + vol>Q1 filters matching live strategy, historical universe from valuation_daily. Fundamentals fetched ONLY on rebalance dates (not every trading day). Fetched data auto-persisted to DB for future `--from-db` runs.
+
+**Important**: `--from-db` requires that `valuation_daily` has PE data for the rebalance dates. Check with: `SELECT trade_date, COUNT(pe_ttm) FROM valuation_daily GROUP BY trade_date`. Dates without PE → strategy returns N/A.
 
 ## Data Freshness Check
 

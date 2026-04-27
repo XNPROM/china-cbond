@@ -84,10 +84,16 @@ def normalize_card(card, theme, idx):
     conv_value = to_float(card.get("conv"))
     pure_value = to_float(card.get("pure"))
     vol_value = to_float(card.get("vol"))
+    implied_vol_value = to_float(card.get("implied_vol"))
     rv_value = to_float(card.get("relative_value"))
     delta_value = to_float(card.get("delta"))
     balance_value = to_float(card.get("balance"))
     ytm_value = to_float(card.get("pure_bond_ytm"))
+    surplus_years_value = to_float(card.get("surplus_years"))
+    conv_price_value = to_float(card.get("conv_price"))
+    pe_ttm_value = to_float(card.get("pe_ttm"))
+    pb_value = to_float(card.get("pb"))
+    total_mv_value = to_float(card.get("total_mv"))
     sector = derive_sector(conv_value)
     search_parts = [
         theme,
@@ -127,6 +133,7 @@ def normalize_card(card, theme, idx):
         "conv": {"text": card.get("conv", ""), "value": conv_value},
         "pure": {"text": card.get("pure", ""), "value": pure_value},
         "vol": {"text": card.get("vol", ""), "value": vol_value},
+        "implied_vol": {"text": card.get("implied_vol", ""), "value": implied_vol_value},
         "pure_bond_ytm": {"text": card.get("pure_bond_ytm", ""), "value": ytm_value},
         "relative_value": {
             "text": card.get("relative_value", ""),
@@ -135,6 +142,12 @@ def normalize_card(card, theme, idx):
         },
         "delta": {"text": card.get("delta", ""), "value": delta_value},
         "balance": {"text": card.get("balance", ""), "value": balance_value},
+        "surplus_years": {"text": card.get("surplus_years", ""), "value": surplus_years_value},
+        "conv_price": {"text": card.get("conv_price", ""), "value": conv_price_value},
+        "pe_ttm": {"text": card.get("pe_ttm", ""), "value": pe_ttm_value},
+        "pb": {"text": card.get("pb", ""), "value": pb_value},
+        "total_mv": {"text": card.get("total_mv", ""), "value": total_mv_value},
+        "sw_l2": card.get("sw_l2", ""),
         "rating": card.get("rating", ""),
         "maturity": card.get("maturity", ""),
         "call_status": {
@@ -156,6 +169,7 @@ def normalize_card(card, theme, idx):
             "stock_name": stock_name,
             "stock_code": stock_code,
             "industry": card.get("industry", ""),
+            "sw_l2": card.get("sw_l2", ""),
             "business": card.get("business", ""),
             "themes": deduped_themes,
             "strategy": card.get("strategy", ""),

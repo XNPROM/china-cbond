@@ -259,52 +259,98 @@
     return `
       <div class="drawer-top">
         <div>
-          <div class="bond-card-top">
-            <span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "未分域")}</span>
-            <span class="pill">${escapeHtml(item.theme_group)}</span>
-          </div>
           <h2 class="drawer-title">${escapeHtml(item.detail.bond_name)}</h2>
-          <p class="drawer-subtitle">${escapeHtml(item.detail.stock_name)} · ${escapeHtml(item.detail.stock_code)} · ${escapeHtml(item.detail.industry || "行业待补充")}</p>
+          <p class="drawer-subtitle">${escapeHtml(item.bond_code)}</p>
           <p class="drawer-copy">${escapeHtml(item.detail.business || "暂无主营描述。")}</p>
-        </div>
-      </div>
-      <div class="drawer-stat-grid">
-        <div class="drawer-stat">
-          <span class="drawer-stat-label">价格</span>
-          <strong class="drawer-stat-value ${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</strong>
-        </div>
-        <div class="drawer-stat">
-          <span class="drawer-stat-label">转股溢价</span>
-          <strong class="drawer-stat-value">${escapeHtml(metricText(item.conv))}</strong>
-        </div>
-        <div class="drawer-stat">
-          <span class="drawer-stat-label">相对价值</span>
-          <strong class="drawer-stat-value ${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</strong>
-        </div>
-        <div class="drawer-stat">
-          <span class="drawer-stat-label">Delta</span>
-          <strong class="drawer-stat-value">${escapeHtml(metricText(item.delta))}</strong>
-        </div>
-        <div class="drawer-stat">
-          <span class="drawer-stat-label">余额(亿)</span>
-          <strong class="drawer-stat-value">${escapeHtml(metricText(item.balance))}</strong>
-        </div>
-        <div class="drawer-stat">
-          <span class="drawer-stat-label">纯债 YTM</span>
-          <strong class="drawer-stat-value">${escapeHtml(metricText(item.pure_bond_ytm))}</strong>
         </div>
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head">
-          <h4>状态与策略</h4>
+          <h4>核心数据</h4>
         </div>
-        <div class="bond-card-flags">
-          <span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "强赎状态未知")}</span>
-          ${item.down_status.text ? `<span class="status-pill ${stateClass(item.down_status.state)}">${escapeHtml(item.down_status.text)}</span>` : ""}
-          ${item.detail.strategy ? `<span class="status-pill note">${escapeHtml(item.detail.strategy)}</span>` : ""}
-          ${item.rating ? `<span class="status-pill note">${escapeHtml(item.rating)}</span>` : ""}
-          ${item.maturity ? `<span class="status-pill note">到期 ${escapeHtml(item.maturity)}</span>` : ""}
+        <dl class="drawer-kv-grid">
+          <div class="drawer-kv-row">
+            <dt>正股</dt>
+            <dd>${escapeHtml(item.detail.stock_name)}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>正股代码</dt>
+            <dd>${escapeHtml(item.detail.stock_code)}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>行业</dt>
+            <dd>${escapeHtml(item.detail.industry || "--")}${item.detail.sw_l2 ? " · " + escapeHtml(item.detail.sw_l2) : ""}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>价格</dt>
+            <dd class="${signedClass(item.day_chg)}">${escapeHtml(metricText(item.price))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>涨跌幅</dt>
+            <dd class="${signedClass(item.day_chg)}">${escapeHtml(metricText(item.day_chg))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>转股溢价率</dt>
+            <dd>${escapeHtml(metricText(item.conv))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>纯债溢价率</dt>
+            <dd>${escapeHtml(metricText(item.pure))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>20日年化&sigma;</dt>
+            <dd>${escapeHtml(metricText(item.vol))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>相对价值</dt>
+            <dd class="${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>Delta</dt>
+            <dd>${escapeHtml(metricText(item.delta))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>隐含波动率</dt>
+            <dd>${escapeHtml(metricText(item.implied_vol))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>纯债YTM</dt>
+            <dd>${escapeHtml(metricText(item.pure_bond_ytm))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>剩余年限</dt>
+            <dd>${escapeHtml(metricText(item.surplus_years))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>余额(亿)</dt>
+            <dd>${escapeHtml(metricText(item.balance))}</dd>
+          </div>
+        </dl>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-head">
+          <h4>条款与分类</h4>
         </div>
+        <dl class="drawer-kv-grid">
+          <div class="drawer-kv-row">
+            <dt>强赎</dt>
+            <dd><span class="status-pill ${stateClass(item.call_status.state)}">${escapeHtml(item.call_status.text || "无")}</span></dd>
+          </div>
+          ${item.down_status.text ? `<div class="drawer-kv-row"><dt>下修</dt><dd><span class="status-pill ${stateClass(item.down_status.state)}">${escapeHtml(item.down_status.text)}</span></dd></div>` : ""}
+          <div class="drawer-kv-row">
+            <dt>评级</dt>
+            <dd>${escapeHtml(item.rating || "--")}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>到期</dt>
+            <dd>${escapeHtml(item.maturity || "--")}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>主分组</dt>
+            <dd><span class="pill ${sectorClass(item.sector)}">${escapeHtml(item.sector || "未分域")}</span> ${escapeHtml(item.theme_group)}</dd>
+          </div>
+          ${item.detail.strategy ? `<div class="drawer-kv-row"><dt>策略</dt><dd><span class="status-pill note">${escapeHtml(item.detail.strategy)}</span></dd></div>` : ""}
+        </dl>
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head">
@@ -312,21 +358,6 @@
         </div>
         <div class="bond-card-tags">
           ${(item.detail.themes || []).map(theme => `<span class="theme-pill">${escapeHtml(theme)}</span>`).join("")}
-        </div>
-      </div>
-      <div class="drawer-section">
-        <div class="drawer-section-head">
-          <h4>时序片段</h4>
-        </div>
-        <div class="trend-row">
-          <div class="trend-card">
-            <strong>Delta</strong>
-            ${sparklineSvg(item.trend.delta, "#1d4ed8")}
-          </div>
-          <div class="trend-card">
-            <strong>相对价值</strong>
-            ${sparklineSvg(item.trend.rv, "#1d7a46")}
-          </div>
         </div>
       </div>
     `;
@@ -399,8 +430,20 @@
         convText: metricText(item.conv),
         rvText: metricText(item.relative_value),
         deltaText: metricText(item.delta),
+        balanceText: metricText(item.balance),
       });
     });
+
+    // Find lowest-RV bond for annotation
+    const allScatter = [...groups.undervalued, ...groups.fair, ...groups.expensive];
+    const lowestRv = allScatter.filter(d => d.value[3] > 0).sort((a, b) => a.value[3] - b.value[3])[0];
+    const markPointData = lowestRv ? [{
+      coord: [lowestRv.value[0], lowestRv.value[1]],
+      symbol: "pin",
+      symbolSize: 40,
+      itemStyle: { color: "#1d7a46" },
+      label: { show: true, formatter: lowestRv.bondName, color: "#1d7a46", fontSize: 11, position: "top", distance: 8 },
+    }] : [];
 
     radarChart.setOption({
       animationDuration: 300,
@@ -418,6 +461,7 @@
             `${escapeHtml(data.themeGroup)} · ${escapeHtml(data.sector || "未分域")}`,
             `价格 ${escapeHtml(data.priceText)} / 转股溢价 ${escapeHtml(data.convText)}`,
             `RV ${escapeHtml(data.rvText)} / Delta ${escapeHtml(data.deltaText)}`,
+            `余额 ${escapeHtml(data.balanceText)} 亿`,
           ].join("<br>");
         },
       },
@@ -442,6 +486,7 @@
           data: groups.undervalued,
           symbolSize: value => value[2],
           itemStyle: { color: "#1d7a46", opacity: 0.86 },
+          markPoint: { data: markPointData, animation: false },
         },
         {
           name: "合理",

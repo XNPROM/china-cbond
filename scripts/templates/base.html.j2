@@ -96,35 +96,6 @@
                 {% endfor %}
               </div>
             </article>
-            <article class="side-panel">
-              <div class="side-panel-head">
-                <h3>主题热度</h3>
-                <span>Top 12</span>
-              </div>
-              <ul class="heat-list">
-                {% for item in view_model.market_radar.theme_heat %}
-                <li>
-                  <span>{{ item.theme | e }}</span>
-                  <strong>{{ item.count }}</strong>
-                </li>
-                {% endfor %}
-              </ul>
-            </article>
-            <article class="side-panel">
-              <div class="side-panel-head">
-                <h3>一级分类</h3>
-                <span>按主题聚合</span>
-              </div>
-              <ul class="category-list">
-                {% for item in view_model.market_radar.categories %}
-                <li>
-                  <span>{{ item.name | e }}</span>
-                  <small>{{ item.theme_count }} 个主题</small>
-                  <strong>{{ item.bond_count }} 只</strong>
-                </li>
-                {% endfor %}
-              </ul>
-            </article>
           </div>
         </div>
       </section>
@@ -189,6 +160,23 @@
           <span>{{ view_model.backtest.summary.start_date | e }} 至 {{ view_model.backtest.summary.end_date | e }}</span>
           <span>{{ view_model.backtest.summary.trading_days }} 个交易日</span>
           <span>{{ view_model.backtest.summary.n_rebalances }} 次调仓</span>
+        </div>
+        <div class="backtest-returns">
+          <div class="backtest-return-card">
+            <span class="backtest-label">双低 Top10</span>
+            <strong class="backtest-value {% if view_model.backtest.summary.cum_return_dl_pct > 0 %}is-positive{% elif view_model.backtest.summary.cum_return_dl_pct < 0 %}is-negative{% endif %}">{{ "%.2f"|format(view_model.backtest.summary.cum_return_dl_pct) }}%</strong>
+            <span class="backtest-foot">年化 {{ "%.1f"|format(view_model.backtest.summary.annualized_dl_pct) }}%</span>
+          </div>
+          <div class="backtest-return-card">
+            <span class="backtest-label">分域双低 Top10</span>
+            <strong class="backtest-value {% if view_model.backtest.summary.cum_return_sn_pct > 0 %}is-positive{% elif view_model.backtest.summary.cum_return_sn_pct < 0 %}is-negative{% endif %}">{{ "%.2f"|format(view_model.backtest.summary.cum_return_sn_pct) }}%</strong>
+            <span class="backtest-foot">年化 {{ "%.1f"|format(view_model.backtest.summary.annualized_sn_pct) }}%</span>
+          </div>
+          <div class="backtest-return-card">
+            <span class="backtest-label">全市场等权</span>
+            <strong class="backtest-value {% if view_model.backtest.summary.cum_return_mkt_pct > 0 %}is-positive{% elif view_model.backtest.summary.cum_return_mkt_pct < 0 %}is-negative{% endif %}">{{ "%.2f"|format(view_model.backtest.summary.cum_return_mkt_pct) }}%</strong>
+            <span class="backtest-foot">年化 {{ "%.1f"|format(view_model.backtest.summary.annualized_mkt_pct) }}%</span>
+          </div>
         </div>
         <div id="equityChart" class="chart-stage chart-stage-lg"></div>
       </section>
