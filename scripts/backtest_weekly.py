@@ -1,20 +1,5 @@
 """Weekly-rebalance backtest for convertible bond strategies.
 
-Fetches historical daily data:
-  - Close prices from cmd_history_quotation (batch, one call per batch — fast)
-  - Conv premium + balance + PE + vol from basic_data (only on rebalance dates)
-Runs double-low and sector-neutral strategies on each rebalance date,
-tracks cumulative returns over the period.
-
-Key design choices:
-  - Multiplicative compounding (not additive)
-  - Configurable slippage + commission (applied symmetrically)
-  - Historical universe (bonds with price data on each date)
-  - PE>0 and vol>Q1 filters matching strategy_score.py
-  - Deduplicated equity curve (keeps last occurrence on tie)
-  - Fundamentals fetched ONLY on rebalance dates (saves ~80% API calls)
-  - Fetched data persisted to DB for future --from-db runs
-
 Usage:
   python scripts/backtest_weekly.py --end-date 2026-04-23 --days 5
   python scripts/backtest_weekly.py --start-date 2025-04-23 --end-date 2026-04-23
@@ -72,10 +57,6 @@ def _interp_log(start, end, frac):
     return start * math.exp(frac * math.log(end / start))
 
 
-# ---------------------------------------------------------------------------
-# iFinD data fetchers
-# ---------------------------------------------------------------------------
-
 def fetch_trading_dates(codes, start_ymd, end_ymd):
     """Get list of trading dates from iFinD history."""
     r = history(codes[0], "close", _ymd_to_dash(start_ymd), _ymd_to_dash(end_ymd))
@@ -114,11 +95,7 @@ def fetch_history_prices(codes, start_ymd, end_ymd):
 
 
 def fetch_day_fundamentals(codes, date_ymd):
-    """Fetch conv_prem, balance, and 20d vol for a specific date via iFinD.
-
-    NOTE: PE is NOT fetched here — ths_pe_ttm_cbond returns 0 for historical dates.
-    Use fetch_underlying_pe_bulk() to get PE from underlying stocks instead.
-    """
+    """Fetch conv_prem, balance, and 20d vol for a specific date via iFinD."""
     date_param = _ymd_to_dash(date_ymd)
     fields = [
         {"indicator": "ths_conversion_premium_rate_cbond", "indiparams": [date_param]},
@@ -139,7 +116,7 @@ def fetch_day_fundamentals(codes, date_ymd):
                     result[code] = {
                         "conv_prem": conv_prem,
                         "balance": balance,
-                        "pe_ttm": None,  # filled later by fetch_underlying_pe_bulk
+                        "pe_ttm": None,
                         "vol_20d": vol_20d,
                     }
             time.sleep(0.12)
@@ -149,11 +126,7 @@ def fetch_day_fundamentals(codes, date_ymd):
 
 
 def fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd):
-    """Fetch PE_TTM for all underlying stocks via history(), return {ucode: {ymd: pe}}.
-
-    ths_pe_ttm_cbond via basic_data returns 0 for historical dates, but
-    history(stock_code, 'pe_ttm', ...) works correctly for underlying equities.
-    """
+    """Fetch PE_TTM for all underlying stocks via history(), return {ucode: {ymd: pe}}."""
     ucodes = list(set(code_to_ucode.values()))
     print(f"[fetch] pulling underlying stock PE for {len(ucodes)} stocks...")
     pe_map = defaultdict(dict)  # {ucode: {ymd: pe}}
@@ -201,7 +174,6 @@ def compute_vol_from_prices(prices, trading_dates, rebalance_ymds, window=20):
     """Compute annualized 20-day realized volatility from close prices.
 
     Returns {ymd: {code: vol_pct}} for each rebalance date.
-    vol_pct = std(log_returns) * sqrt(252) * 100
     """
     # Build sorted date index for lookup
     date_idx = {d: i for i, d in enumerate(trading_dates)}
@@ -248,10 +220,6 @@ def merge_vol_into_fundamentals(fundamentals, vol_map):
     return n_merged
 
 
-# ---------------------------------------------------------------------------
-# DB-based data readers
-# ---------------------------------------------------------------------------
-
 def fetch_trading_dates_from_db(start_ymd, end_ymd):
     """Get list of trading dates from DuckDB valuation_daily."""
     con = connect()
@@ -283,18 +251,13 @@ def fetch_prices_from_db(trading_dates):
 
 
 def fetch_fundamentals_from_db(rebalance_dates):
-    """Fetch conv_prem, balance, PE, vol from DuckDB for rebalance dates only.
-
-    Reads conv_prem_pct, outstanding_yi, pe_ttm from valuation_daily.
-    Reads vol_20d_pct from vol_daily via universe.ucode JOIN.
-    If vol_daily has no data for a date, falls back to implied_vol from valuation_daily.
-    """
+    """Fetch conv_prem, balance, PE, vol from DuckDB for rebalance dates only."""
     con = connect()
     dates_fmt = [_ymd_to_dash(d) for d in rebalance_dates]
     placeholders = ",".join(["?"] * len(dates_fmt))
     rows = con.execute(
         f"SELECT v.code, v.trade_date, v.conv_prem_pct, v.outstanding_yi, v.pe_ttm, "
-        f"  vd.vol_20d_pct, v.implied_vol "
+        f"  vd.vol_20d_pct "
         f"FROM valuation_daily v "
         f"LEFT JOIN universe u ON v.code = u.code "
         f"LEFT JOIN vol_daily vd ON u.ucode = vd.ucode AND v.trade_date = vd.trade_date "
@@ -303,28 +266,19 @@ def fetch_fundamentals_from_db(rebalance_dates):
     ).fetchall()
     con.close()
     fundamentals = defaultdict(dict)
-    for code, td, conv_prem, balance, pe_ttm, vol_20d, implied_vol in rows:
+    for code, td, conv_prem, balance, pe_ttm, vol_20d in rows:
         ymd = td.replace("-", "")
-        # Prefer computed vol; fall back to implied_vol (both in similar scale for ranking)
-        vol = vol_20d if vol_20d is not None else implied_vol
         fundamentals.setdefault(ymd, {})[code] = {
             "conv_prem": conv_prem,
             "balance": balance,
             "pe_ttm": pe_ttm,
-            "vol_20d": vol,
+            "vol_20d": vol_20d,
         }
     return fundamentals
 
 
-# ---------------------------------------------------------------------------
-# Persist fetched data to DB (so future --from-db runs have data)
-# ---------------------------------------------------------------------------
-
 def persist_prices_to_db(prices, codes_set):
-    """Write fetched close prices into valuation_daily (price column only).
-
-    Uses INSERT OR IGNORE — won't overwrite existing full rows from fetch_valuation.
-    """
+    """Write fetched close prices into valuation_daily (price column only)."""
     con = connect()
     n_written = 0
     batch = []
@@ -378,10 +332,6 @@ def persist_fundamentals_to_db(fundamentals):
     con.close()
     return n_written
 
-
-# ---------------------------------------------------------------------------
-# Strategy scoring
-# ---------------------------------------------------------------------------
 
 def classify_sector(conv_prem):
     if conv_prem is None:
@@ -491,10 +441,6 @@ def dedup_equity(curve):
     return [curve[i] for i in last_indices]
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     ap = argparse.ArgumentParser(description="Weekly-rebalance backtest for CB strategies")
     ap.add_argument("--start-date", default="", help="YYYY-MM-DD")
@@ -528,7 +474,7 @@ def main():
         print("[warn] iFinD not available, falling back to --from-db mode")
         args.from_db = True
 
-    # ----- Step 1: Get CB codes -----
+    # ----- Get CB codes -----
     con = connect()
     start_dash = _ymd_to_dash(start_ymd)
     end_dash = _ymd_to_dash(end_ymd)
@@ -555,7 +501,7 @@ def main():
     code_to_ucode = {r[0]: r[1] for r in code_ucode_rows}
     print(f"[mapping] {len(code_to_ucode)} CB -> underlying stock mappings")
 
-    # ----- Step 2: Fetch prices first (to derive accurate trading dates) -----
+    # ----- Fetch prices (to derive accurate trading dates) -----
     if args.from_db:
         print("[fetch] reading trading dates from DB...")
         trading_dates = fetch_trading_dates_from_db(start_ymd, end_ymd)
@@ -568,8 +514,7 @@ def main():
     else:
         print(f"[fetch] pulling historical prices for {len(codes)} bonds...")
         prices = fetch_history_prices(codes, start_ymd, end_ymd)
-        # Derive trading dates from the union of all price dates (more reliable
-        # than using a single code which may not span the full range)
+        # Derive trading dates from the union of all price dates
         all_dates = set()
         for code_dates in prices.values():
             all_dates.update(code_dates.keys())
@@ -581,7 +526,7 @@ def main():
 
     print(f"[dates] {len(trading_dates)} trading days: {trading_dates[0]} -> {trading_dates[-1]}")
 
-    # ----- Step 3: Compute rebalance schedule (BEFORE fetching fundamentals) -----
+    # ----- Compute rebalance schedule -----
     if args.rebalance == "weekly":
         holding = args.holding_days
         rebalance_indices = list(range(0, len(trading_dates) - holding, holding))
@@ -597,7 +542,7 @@ def main():
     total_px = sum(len(v) for v in prices.values())
     print(f"[prices] {total_px} price points for {len(prices)} bonds")
 
-    # ----- Step 4: Fetch fundamentals (ONLY rebalance dates) -----
+    # ----- Fetch fundamentals (rebalance dates only) -----
     rebalance_date_list = sorted(rebalance_ymds)
 
     if args.from_db:
@@ -636,22 +581,22 @@ def main():
             n_vol = sum(1 for v in fund.values() if v.get("vol_20d") is not None)
             print(f"  [{i+1}/{len(rebalance_date_list)}] {td}: {len(fund)} conv_prem, {n_pe} PE, {n_vol} vol")
 
-        # Persist fetched data to DB for future --from-db runs
+        # Persist fetched data to DB
         print("[persist] saving fetched data to DB...")
         n_px = persist_prices_to_db(prices, codes_set)
         n_fund = persist_fundamentals_to_db(fundamentals)
         print(f"[persist] wrote {n_px} price rows + {n_fund} fundamental rows to DB")
 
-        # Fetch PE from underlying stocks (ths_pe_ttm_cbond broken for historical)
+        # Fetch PE from underlying stocks
         pe_map = fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd)
         merge_pe_into_fundamentals(fundamentals, code_to_ucode, pe_map)
 
-        # Compute vol from price history (ths_vol_20d_cbond broken for historical)
+        # Compute vol from price history
         print("[vol] computing 20-day realized volatility from prices...")
         vol_map = compute_vol_from_prices(prices, trading_dates, rebalance_ymds)
         merge_vol_into_fundamentals(fundamentals, vol_map)
 
-        # Also persist PE into DB
+        # Persist PE into DB
         pe_persist_count = 0
         pe_con = connect()
         for ymd, fund_map in fundamentals.items():
@@ -670,7 +615,7 @@ def main():
         pe_con.close()
         print(f"[persist] updated {pe_persist_count} PE values in DB")
 
-    # ----- Step 6: Run backtest -----
+    # ----- Run backtest -----
     equity_dl = 1.0
     equity_sn = 1.0
     equity_mkt = 1.0
@@ -765,7 +710,7 @@ def main():
         cum_mkt_pct = (equity_mkt - 1) * 100
         print(f"  {td_select}->{td_buy}->{td_sell}: DL={dl_s}(n={dl_n}) SN={sn_s}(n={sn_n}) MKT={mkt_ret*100:+.3f}% | cum: DL={cum_dl_pct:+.3f}% SN={cum_sn_pct:+.3f}% MKT={cum_mkt_pct:+.3f}%")
 
-    # ----- Step 7: Summary -----
+    # ----- Summary -----
     n_rebalances = len(rebalance_indices)
     n_trading_days = len(trading_dates)
     cum_dl_pct = (equity_dl - 1) * 100
@@ -793,7 +738,7 @@ def main():
     print(f"{'分域双低Top'+str(args.top):<20} {cum_sn_pct:>+9.3f}% {ann_sn:>+11.1f}%")
     print(f"{'全市场等权':<20} {cum_mkt_pct:>+9.3f}% {ann_mkt:>+11.1f}%")
 
-    # ----- Step 8: Save -----
+    # ----- Save -----
     out_dir = f"data/raw/asof={end_ymd}"
     os.makedirs(out_dir, exist_ok=True)
     out_path = f"{out_dir}/backtest_weekly.json"

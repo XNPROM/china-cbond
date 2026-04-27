@@ -84,7 +84,6 @@ def normalize_card(card, theme, idx):
     conv_value = to_float(card.get("conv"))
     pure_value = to_float(card.get("pure"))
     vol_value = to_float(card.get("vol"))
-    implied_vol_value = to_float(card.get("implied_vol"))
     rv_value = to_float(card.get("relative_value"))
     delta_value = to_float(card.get("delta"))
     balance_value = to_float(card.get("balance"))
@@ -133,7 +132,6 @@ def normalize_card(card, theme, idx):
         "conv": {"text": card.get("conv", ""), "value": conv_value},
         "pure": {"text": card.get("pure", ""), "value": pure_value},
         "vol": {"text": card.get("vol", ""), "value": vol_value},
-        "implied_vol": {"text": card.get("implied_vol", ""), "value": implied_vol_value},
         "pure_bond_ytm": {"text": card.get("pure_bond_ytm", ""), "value": ytm_value},
         "relative_value": {
             "text": card.get("relative_value", ""),

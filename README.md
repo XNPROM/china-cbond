@@ -167,7 +167,6 @@ python scripts/fetch_cb_universe.py --date 20260424
 | redemp_stop_date | VARCHAR | 强赎停牌日 |
 | pe_ttm | DOUBLE | 正股 PE(TTM) |
 | total_mv_yi | DOUBLE | 正股总市值 (亿元) |
-| implied_vol | DOUBLE | 隐含波动率 (iFinD，暂无数据) |
 | pure_bond_ytm | DOUBLE | 纯债到期收益率 (%) |
 | ifind_doublelow | DOUBLE | iFinD 内置双低值 |
 | option_value | DOUBLE | iFinD 期权价值 |
@@ -323,7 +322,6 @@ BS 看涨期权价值 = S·N(d1) - K·e^(-rT)·N(d2)
 ## 已知限制
 
 - iFinD `ths_concept_*` 字段全部返回 ERR，无法获取结构化概念/板块数据，题材分类依赖正股简介文本
-- iFinD `ths_implied_volatility_cbond` 隐含波动率字段对所有历史日期均返回 None，页面中该字段暂显示 "—"
 - 余额为 0 的券视为已退市（强制赎回）
 - 新上市不足 20 个交易日的券波动率样本不足，`vol_daily.n_samples` 可供判断
 - Anaconda Python 与 iFinD 存在 SSL 握手问题，建议使用系统 Python
@@ -337,7 +335,7 @@ BS 看涨期权价值 = S·N(d1) - K·e^(-rT)·N(d2)
 **UI 改进 (4项)**
 1. 散点图去掉气泡大小（余额），改为统一等大圆点；去掉 "未分域" 显示
 2. 卡片文字溢出修复：债券名称、副标题、统计数值均加 `text-overflow: ellipsis` 截断
-3. 卡片新增纯债溢价率和隐含波动率字段（6 字段 3 列布局）
+3. 卡片新增纯债溢价率字段（5 字段 3 列布局）
 4. 强赎/下修状态改进：未触发显示绿色安全标签，已触发显示警告图标
 
 **数据修复**

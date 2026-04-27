@@ -29,7 +29,6 @@ SELECT
   v.ths_industry,
   v.pb,
   v.redemp_stop_date,
-  v.implied_vol,
   v.pe_ttm,
   v.total_mv_yi,
   v.pure_bond_ytm,

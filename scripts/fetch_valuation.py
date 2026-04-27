@@ -1,21 +1,5 @@
 """Batch-fetch convertible-bond valuation snapshot.
 
-For every bond code, pull:
-  - ths_conversion_premium_rate_cbond (转股溢价率, %)
-  - ths_pure_bond_premium_rate_cbond (纯债溢价率, %)
-  - ths_bond_balance_cbond (余额, 亿元)
-  - ths_issue_credit_rating_cbond (发行评级)
-  - latest price + changeRatio (实时价 + 当日涨跌幅)
-  - 强赎: no_call_start/end, call_trigger_days, call_trigger_ratio
-  - 下修: has_down_revision, down_trigger_ratio
-  - 转股价
-  - 正股PB (ths_stock_pb_cbond)
-  - 同花顺行业 (ths_the_ths_industry_cbond)
-
-Then for every underlying stock code, pull:
-  - ths_pe_ttm (正股滚动市盈率)
-  - ths_market_value_stock (正股总市值, 元 → 亿元)
-
 Usage:
   python3 fetch_valuation.py \
       --codes cbond_codes.txt \
@@ -58,39 +42,23 @@ def main():
         {"indicator": "ths_issue_credit_rating_cbond", "indiparams": [""]},
         {"indicator": "ths_maturity_date_bond", "indiparams": [""]},
         {"indicator": "ths_redemp_stop_trading_date_bond", "indiparams": [""]},
-        # 强赎
         {"indicator": "ths_not_compulsory_redemp_startdate_cbond", "indiparams": [""]},
         {"indicator": "ths_not_compulsory_redemp_enddate_cbond_bond", "indiparams": [""]},
         {"indicator": "ths_conditionalredemption_triggercumulativedays_cbond", "indiparams": [args.date]},
         {"indicator": "ths_redemp_trigger_ratio_cbond", "indiparams": [""]},
-        # 下修
         {"indicator": "ths_is_special_down_correct_clause_cbond", "indiparams": [""]},
         {"indicator": "ths_trigger_ratio_cbond", "indiparams": [""]},
-        # 转股价
         {"indicator": "ths_conversion_price_cbond", "indiparams": [args.date]},
-        # 正股PB
         {"indicator": "ths_stock_pb_cbond", "indiparams": [args.date]},
-        # 同花顺行业
         {"indicator": "ths_the_ths_industry_cbond", "indiparams": [""]},
-        # 隐含波动率
-        {"indicator": "ths_implied_volatility_cbond", "indiparams": [args.date]},
-        # 纯债到期收益率
         {"indicator": "ths_pure_bond_ytm_cbond", "indiparams": [args.date]},
-        # iFinD双低值
         {"indicator": "ths_convertible_debt_doublelow_cbond", "indiparams": [args.date]},
-        # 期权价值
         {"indicator": "ths_option_value_cbond", "indiparams": [args.date]},
-        # 剩余期限(天)
         {"indicator": "ths_surplus_term_d_cbond", "indiparams": [args.date]},
-        # 剩余期限(年)
         {"indicator": "ths_remain_duration_y_cbond", "indiparams": [args.date]},
-        # 累计转股比例
         {"indicator": "ths_accum_conversion_ratio_cbond", "indiparams": [args.date]},
-        # 转股稀释比例
         {"indicator": "ths_conversion_dlt_ratio_cbond", "indiparams": [args.date]},
-        # 纯债价值
         {"indicator": "ths_pure_bond_value_cbond", "indiparams": [args.date]},
-        # 到期赎回价
         {"indicator": "ths_maturity_redemp_price_cbond", "indiparams": [""]},
     ]
 
@@ -116,7 +84,6 @@ def main():
                     "conv_price":  (tbl.get("ths_conversion_price_cbond") or [None])[0],
                     "pb":          (tbl.get("ths_stock_pb_cbond") or [None])[0],
                     "ths_industry": (tbl.get("ths_the_ths_industry_cbond") or [""])[0],
-                    "implied_vol": (tbl.get("ths_implied_volatility_cbond") or [None])[0],
                     "pure_bond_ytm": (tbl.get("ths_pure_bond_ytm_cbond") or [None])[0],
                     "ifind_doublelow": (tbl.get("ths_convertible_debt_doublelow_cbond") or [None])[0],
                     "option_value": (tbl.get("ths_option_value_cbond") or [None])[0],
@@ -170,7 +137,7 @@ def main():
                     "余额(亿元)", "评级", "到期日", "强赎停止交易日", "转股价", "正股PB",
                     "不强赎起始日", "不强赎截止日", "强赎累计触发天数", "强赎触发比例(%)",
                     "是否有下修条款", "下修触发比例(%)", "同花顺行业",
-                    "正股PE_TTM", "正股总市值(亿)", "隐含波动率(%)",
+                    "正股PE_TTM", "正股总市值(亿)",
                     "纯债YTM(%)", "iFinD双低", "期权价值", "剩余期限(天)", "剩余期限(年)",
                     "累计转股比例(%)", "转股稀释比例(%)", "纯债价值", "到期赎回价"])
         for c in codes:
@@ -187,7 +154,6 @@ def main():
                         r.get("has_down_revision", ""), r.get("down_trigger_ratio", ""),
                         r.get("ths_industry", ""),
                         sd.get("pe_ttm", ""), sd.get("total_mv_yi", ""),
-                        r.get("implied_vol", ""),
                         r.get("pure_bond_ytm", ""), r.get("ifind_doublelow", ""),
                         r.get("option_value", ""), r.get("surplus_days", ""),
                         r.get("surplus_years", ""), r.get("accum_conv_ratio", ""),
@@ -224,7 +190,6 @@ def main():
             "ths_industry": rows.get(c, {}).get("ths_industry", ""),
             "pb": _f(rows.get(c, {}).get("pb")),
             "redemp_stop_date": rows.get(c, {}).get("redemp_stop_date") or "",
-            "implied_vol": _f(rows.get(c, {}).get("implied_vol")),
             "pure_bond_ytm": _f(rows.get(c, {}).get("pure_bond_ytm")),
             "ifind_doublelow": _f(rows.get(c, {}).get("ifind_doublelow")),
             "option_value": _f(rows.get(c, {}).get("option_value")),

@@ -25,7 +25,6 @@ DATE_FIELDS = [
     ("pure_bond_ytm",            "ths_pure_bond_ytm_cbond"),
     ("ifind_doublelow",          "ths_convertible_debt_doublelow_cbond"),
     ("option_value",             "ths_option_value_cbond"),
-    ("implied_vol",              "ths_implied_volatility_cbond"),
     ("surplus_days",             "ths_surplus_term_d_cbond"),
     ("surplus_years",            "ths_remain_duration_y_cbond"),
     ("accum_conv_ratio",         "ths_accum_conversion_ratio_cbond"),

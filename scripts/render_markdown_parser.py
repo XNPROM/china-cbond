@@ -152,7 +152,6 @@ def parse_card(lines, start_idx):
         "conv": metrics.get("转股溢价率", ""),
         "pure": metrics.get("纯债溢价率", ""),
         "vol": metrics.get("20日年化σ", ""),
-        "implied_vol": metrics.get("隐含波动率", ""),
         "pure_bond_ytm": metrics.get("纯债YTM", ""),
         "relative_value": metrics.get("相对价值", ""),
         "delta": metrics.get("Delta", ""),

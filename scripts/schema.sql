@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS valuation_daily (
   redemp_stop_date TEXT,
   pe_ttm DOUBLE,
   total_mv_yi DOUBLE,
-  implied_vol DOUBLE,
   pure_bond_ytm DOUBLE,
   ifind_doublelow DOUBLE,
   option_value DOUBLE,

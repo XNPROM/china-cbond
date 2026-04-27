@@ -189,10 +189,6 @@
             <strong class="stat-value ${stateClass(item.relative_value.state) === "safe" ? "is-positive" : stateClass(item.relative_value.state) === "danger" ? "is-negative" : ""}">${escapeHtml(metricText(item.relative_value))}</strong>
           </div>
           <div class="stat-box">
-            <span class="stat-label">隐含波动率</span>
-            <strong class="stat-value">${escapeHtml(metricText(item.implied_vol))}</strong>
-          </div>
-          <div class="stat-box">
             <span class="stat-label">Delta</span>
             <strong class="stat-value">${escapeHtml(metricText(item.delta))}</strong>
           </div>
@@ -318,10 +314,6 @@
           <div class="drawer-kv-row">
             <dt>Delta</dt>
             <dd>${escapeHtml(metricText(item.delta))}</dd>
-          </div>
-          <div class="drawer-kv-row">
-            <dt>隐含波动率</dt>
-            <dd>${escapeHtml(metricText(item.implied_vol))}</dd>
           </div>
           <div class="drawer-kv-row">
             <dt>纯债YTM</dt>

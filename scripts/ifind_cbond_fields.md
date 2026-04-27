@@ -65,7 +65,6 @@
 | 转股溢价率 | `ths_conversion_premium_rate_cbond` |
 | 纯债溢价率 | `ths_pure_bond_premium_rate_cbond` |
 | 纯债价值 | `ths_pure_bond_value_cbond` |
-| 隐含波动率 | `ths_implied_volatility_cbond` |
 | 双低 | `ths_convertible_debt_doublelow_cbond` |
 
 ## 完整字段列表

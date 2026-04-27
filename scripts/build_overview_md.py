@@ -239,8 +239,8 @@ def main():
             lines.append("")
             lines.append(f"### {row['name']} ({row['code']})")
             lines.append("")
-            lines.append("| 正股 | 申万一级 | 申万二级 | 价格 | 涨跌幅 | 转股溢价率 | 纯债溢价率 | 20日年化σ | 隐含波动率 | 纯债YTM | 余额(亿) | 评级 | 到期 | 剩余(年) | 转股价 | PE | PB | 市值(亿) | 相对价值 | Delta | 强赎 | 下修 | 策略分 |")
-            lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+            lines.append("| 正股 | 申万一级 | 申万二级 | 价格 | 涨跌幅 | 转股溢价率 | 纯债溢价率 | 20日年化σ | 纯债YTM | 余额(亿) | 评级 | 到期 | 剩余(年) | 转股价 | PE | PB | 市值(亿) | 相对价值 | Delta | 强赎 | 下修 | 策略分 |")
+            lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
             call_label = _call_status(row)
             down_label = _down_status(row)
@@ -258,7 +258,6 @@ def main():
                 f"| {row['uname']} ({row['ucode']}) | {sw_l1} | {sw_l2} | "
                 f"{_fmt_num(row.get('latest'))} | {_fmt_signed_pct(row.get('day_chg'))} | {_fmt_pct(row.get('conv_prem'))} | "
                 f"{_fmt_pct(row.get('pure_prem'))} | {_fmt_vol(row.get('vol_20d'))} | "
-                f"{_fmt_pct(row.get('implied_vol'))} | "
                 f"{_fmt_ytm(row.get('pure_bond_ytm'))} | "
                 f"{_fmt_num(row.get('balance'))} | {row.get('rating','')} | {_fmt_date(row.get('maturity'))} | "
                 f"{_fmt_num(row.get('surplus_years'))} | "
