@@ -24,12 +24,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare Pages artifact
-        run: |
-          mkdir -p _site
-          cp docs/index.html _site/index.html
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
