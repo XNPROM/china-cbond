@@ -173,10 +173,12 @@
           {% for label, key in curves %}
           {% set cum = view_model.backtest.summary["cum_return_" ~ key ~ "_pct"] | default(0) %}
           {% set ann = view_model.backtest.summary["annualized_" ~ key ~ "_pct"] | default(0) %}
+          {% set sharpe = view_model.backtest.summary["sharpe_" ~ key] | default(0) %}
+          {% set mdd = view_model.backtest.summary["max_drawdown_" ~ key ~ "_pct"] | default(0) %}
           <div class="backtest-return-card">
             <span class="backtest-label">{{ label }}</span>
             <strong class="backtest-value {% if cum > 0 %}is-positive{% elif cum < 0 %}is-negative{% endif %}">{{ "%.2f"|format(cum) }}%</strong>
-            <span class="backtest-foot">年化 {{ "%.1f"|format(ann) }}%</span>
+            <span class="backtest-foot">年化 {{ "%.1f"|format(ann) }}% · Sharpe {{ "%.2f"|format(sharpe) }} · 回撤 {{ "%.1f"|format(mdd) }}%</span>
           </div>
           {% endfor %}
         </div>

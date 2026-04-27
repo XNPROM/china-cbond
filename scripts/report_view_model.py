@@ -273,6 +273,8 @@ def build_backtest_payload(backtest):
     for k in CURVES:
         summary[f"cum_return_{k}_pct"] = backtest.get(f"cum_return_{k}_pct", 0)
         summary[f"annualized_{k}_pct"] = backtest.get(f"annualized_{k}_pct", 0)
+        summary[f"sharpe_{k}"] = backtest.get(f"sharpe_{k}", 0)
+        summary[f"max_drawdown_{k}_pct"] = backtest.get(f"max_drawdown_{k}_pct", 0)
     return {
         "summary": summary,
         "equity_curve": backtest.get("equity_curve", []),
