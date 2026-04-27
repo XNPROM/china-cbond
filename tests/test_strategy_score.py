@@ -52,33 +52,32 @@ class PercentileTests(unittest.TestCase):
 
 class SectorClassificationTests(unittest.TestCase):
     def test_equity_sector(self):
-        """conv_prem < 20% -> 偏股"""
-        self.assertEqual(_classify_sector(5), "偏股")
-        self.assertEqual(_classify_sector(19.9), "偏股")
+        """delta >= 0.7 -> 偏股"""
+        self.assertEqual(_classify_sector(0.7), "偏股")
+        self.assertEqual(_classify_sector(0.9), "偏股")
 
     def test_balanced_sector(self):
-        """20% <= conv_prem < 50% -> 平衡"""
-        self.assertEqual(_classify_sector(20), "平衡")
-        self.assertEqual(_classify_sector(35), "平衡")
-        self.assertEqual(_classify_sector(49.9), "平衡")
+        """0.4 <= delta < 0.7 -> 平衡"""
+        self.assertEqual(_classify_sector(0.4), "平衡")
+        self.assertEqual(_classify_sector(0.55), "平衡")
+        self.assertEqual(_classify_sector(0.69), "平衡")
 
     def test_debt_sector(self):
-        """conv_prem >= 50% -> 偏债"""
-        self.assertEqual(_classify_sector(50), "偏债")
-        self.assertEqual(_classify_sector(100), "偏债")
-        self.assertEqual(_classify_sector(200), "偏债")
+        """delta < 0.4 -> 偏债"""
+        self.assertEqual(_classify_sector(0.1), "偏债")
+        self.assertEqual(_classify_sector(0.39), "偏债")
 
-    def test_zero_conv_prem(self):
-        """Zero premium should be 偏股"""
-        self.assertEqual(_classify_sector(0), "偏股")
+    def test_zero_delta(self):
+        """Zero delta should be 偏债"""
+        self.assertEqual(_classify_sector(0), "偏债")
 
-    def test_negative_conv_prem(self):
-        """Negative premium (rare) should be 偏股"""
-        self.assertEqual(_classify_sector(-10), "偏股")
+    def test_none_delta(self):
+        """None delta should default to 偏债"""
+        self.assertEqual(_classify_sector(None), "偏债")
 
 
 class RankAndScoreTests(unittest.TestCase):
-    def _make_bond(self, code, conv_prem, latest, pe_ttm=None):
+    def _make_bond(self, code, conv_prem, latest, pe_ttm=None, bs_delta=None):
         return {
             "code": code,
             "name": f"TestBond_{code}",
@@ -89,6 +88,7 @@ class RankAndScoreTests(unittest.TestCase):
             "pe_ttm": pe_ttm,
             "vol_20d": 30.0,
             "day_chg": 0.0,
+            "bs_delta": bs_delta,
         }
 
     def test_basic_scoring(self):
@@ -120,11 +120,11 @@ class RankAndScoreTests(unittest.TestCase):
         self.assertAlmostEqual(bond_c["rank_overall"], 7.5)
 
     def test_sector_classification_in_scoring(self):
-        """Each bond should be assigned correct sector."""
+        """Each bond should be assigned correct sector based on bs_delta."""
         candidates = [
-            self._make_bond("A", conv_prem=10, latest=100),
-            self._make_bond("B", conv_prem=30, latest=100),
-            self._make_bond("C", conv_prem=60, latest=100),
+            self._make_bond("A", conv_prem=10, latest=100, bs_delta=0.8),
+            self._make_bond("B", conv_prem=30, latest=100, bs_delta=0.5),
+            self._make_bond("C", conv_prem=60, latest=100, bs_delta=0.2),
         ]
 
         scored = _rank_and_score(candidates)

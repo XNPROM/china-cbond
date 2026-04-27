@@ -162,21 +162,23 @@
           <span>{{ view_model.backtest.summary.n_rebalances }} 次调仓</span>
         </div>
         <div class="backtest-returns">
+          {% set curves = [
+            ("双低 Top10", "dl"),
+            ("偏股双低", "equity"),
+            ("平衡双低", "balanced"),
+            ("偏债双低", "debt"),
+            ("低估 Top10", "rv"),
+            ("中证转债", "bench"),
+          ] %}
+          {% for label, key in curves %}
+          {% set cum = view_model.backtest.summary["cum_return_" ~ key ~ "_pct"] | default(0) %}
+          {% set ann = view_model.backtest.summary["annualized_" ~ key ~ "_pct"] | default(0) %}
           <div class="backtest-return-card">
-            <span class="backtest-label">双低 Top10</span>
-            <strong class="backtest-value {% if view_model.backtest.summary.cum_return_dl_pct > 0 %}is-positive{% elif view_model.backtest.summary.cum_return_dl_pct < 0 %}is-negative{% endif %}">{{ "%.2f"|format(view_model.backtest.summary.cum_return_dl_pct) }}%</strong>
-            <span class="backtest-foot">年化 {{ "%.1f"|format(view_model.backtest.summary.annualized_dl_pct) }}%</span>
+            <span class="backtest-label">{{ label }}</span>
+            <strong class="backtest-value {% if cum > 0 %}is-positive{% elif cum < 0 %}is-negative{% endif %}">{{ "%.2f"|format(cum) }}%</strong>
+            <span class="backtest-foot">年化 {{ "%.1f"|format(ann) }}%</span>
           </div>
-          <div class="backtest-return-card">
-            <span class="backtest-label">分域双低 Top10</span>
-            <strong class="backtest-value {% if view_model.backtest.summary.cum_return_sn_pct > 0 %}is-positive{% elif view_model.backtest.summary.cum_return_sn_pct < 0 %}is-negative{% endif %}">{{ "%.2f"|format(view_model.backtest.summary.cum_return_sn_pct) }}%</strong>
-            <span class="backtest-foot">年化 {{ "%.1f"|format(view_model.backtest.summary.annualized_sn_pct) }}%</span>
-          </div>
-          <div class="backtest-return-card">
-            <span class="backtest-label">全市场等权</span>
-            <strong class="backtest-value {% if view_model.backtest.summary.cum_return_mkt_pct > 0 %}is-positive{% elif view_model.backtest.summary.cum_return_mkt_pct < 0 %}is-negative{% endif %}">{{ "%.2f"|format(view_model.backtest.summary.cum_return_mkt_pct) }}%</strong>
-            <span class="backtest-foot">年化 {{ "%.1f"|format(view_model.backtest.summary.annualized_mkt_pct) }}%</span>
-          </div>
+          {% endfor %}
         </div>
         <div id="equityChart" class="chart-stage chart-stage-lg"></div>
       </section>

@@ -45,12 +45,12 @@ def to_float(value, default=None):
             return default
 
 
-def derive_sector(conv_value):
-    if conv_value is None:
-        return ""
-    if conv_value < 20:
+def derive_sector(delta_value):
+    if delta_value is None:
+        return "偏债"
+    if delta_value >= 0.7:
         return "偏股"
-    if conv_value < 50:
+    if delta_value >= 0.4:
         return "平衡"
     return "偏债"
 
@@ -93,7 +93,7 @@ def normalize_card(card, theme, idx):
     pe_ttm_value = to_float(card.get("pe_ttm"))
     pb_value = to_float(card.get("pb"))
     total_mv_value = to_float(card.get("total_mv"))
-    sector = derive_sector(conv_value)
+    sector = derive_sector(delta_value)
     search_parts = [
         theme,
         card.get("bond_name", ""),
@@ -262,19 +262,19 @@ def build_strategy_panels(strategy_picks):
 def build_backtest_payload(backtest):
     if not backtest:
         return None
+    CURVES = ["dl", "equity", "balanced", "debt", "rv", "bench"]
+    summary = {
+        "start_date": backtest.get("start_date", ""),
+        "end_date": backtest.get("end_date", ""),
+        "trading_days": backtest.get("trading_days", 0),
+        "n_rebalances": backtest.get("n_rebalances", 0),
+        "sector_method": backtest.get("sector_method", "delta"),
+    }
+    for k in CURVES:
+        summary[f"cum_return_{k}_pct"] = backtest.get(f"cum_return_{k}_pct", 0)
+        summary[f"annualized_{k}_pct"] = backtest.get(f"annualized_{k}_pct", 0)
     return {
-        "summary": {
-            "start_date": backtest.get("start_date", ""),
-            "end_date": backtest.get("end_date", ""),
-            "trading_days": backtest.get("trading_days", 0),
-            "n_rebalances": backtest.get("n_rebalances", 0),
-            "cum_return_dl_pct": backtest.get("cum_return_dl_pct", 0),
-            "annualized_dl_pct": backtest.get("annualized_dl_pct", 0),
-            "cum_return_sn_pct": backtest.get("cum_return_sn_pct", 0),
-            "annualized_sn_pct": backtest.get("annualized_sn_pct", 0),
-            "cum_return_mkt_pct": backtest.get("cum_return_mkt_pct", 0),
-            "annualized_mkt_pct": backtest.get("annualized_mkt_pct", 0),
-        },
+        "summary": summary,
         "equity_curve": backtest.get("equity_curve", []),
     }
 

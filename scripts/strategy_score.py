@@ -1,10 +1,10 @@
 """Double-low strategy scoring for convertible bonds.
 
-Two strategies:
+Strategies:
 1. 双低 (vanilla): PE>0, vol>Q1, rank = 1.5*rank(conv_prem) + rank(price), top 30
-2. 双低-分域 (sector-neutral): Same filter, then classify into 3 sectors by
-   conv_prem (偏股<20%, 平衡20-50%, 偏债≥50%), rank independently within each
-   sector, pick top 10 per sector.
+2. 双低-分域 (sector-neutral): Same filter, classify into 3 sectors by Delta
+   (偏股 delta>=0.7, 平衡 0.4<=delta<0.7, 偏债 delta<0.4), rank within each sector
+3. 低估: Broad pool, rank by BS relative value ascending
 
 Usage:
   python3 strategy_score.py \
@@ -19,9 +19,9 @@ from _db import connect, init_schema, upsert as db_upsert
 
 
 SECTOR_THRESHOLDS = [
-    ("偏股", lambda cp: cp < 20),
-    ("平衡", lambda cp: 20 <= cp < 50),
-    ("偏债", lambda cp: cp >= 50),
+    ("偏股", lambda d: d >= 0.7),
+    ("平衡", lambda d: 0.4 <= d < 0.7),
+    ("偏债", lambda d: d < 0.4),
 ]
 
 
@@ -35,9 +35,11 @@ def _percentile(sorted_vals, pct):
     return sorted_vals[lo] + frac * (sorted_vals[hi] - sorted_vals[lo])
 
 
-def _classify_sector(conv_prem):
+def _classify_sector(delta):
+    if delta is None:
+        return "偏债"
     for name, pred in SECTOR_THRESHOLDS:
-        if pred(conv_prem):
+        if pred(delta):
             return name
     return "偏债"
 
@@ -58,7 +60,7 @@ def _rank_and_score(candidates):
             "name": r["name"],
             "ucode": r.get("ucode", ""),
             "uname": r.get("uname", ""),
-            "sector": _classify_sector(r["conv_prem"]),
+            "sector": _classify_sector(r.get("bs_delta")),
             "rank_conv_prem": rc,
             "rank_price": rp,
             "rank_overall": overall,
@@ -67,6 +69,7 @@ def _rank_and_score(candidates):
             "pe_ttm": r["pe_ttm"],
             "vol_20d": r.get("vol_20d"),
             "day_chg": r.get("day_chg"),
+            "bs_delta": r.get("bs_delta"),
         })
     return scored
 
@@ -126,10 +129,10 @@ def main():
         row["strategy"] = "双低"
         row["note"] = f"转股溢价率{row['conv_prem']:.1f}%，价格{row['latest']:.1f}"
 
-    # --- Strategy 2: Sector-neutral double-low ---
+    # --- Strategy 2: Sector-neutral double-low (by Delta) ---
     sector_groups = {"偏股": [], "平衡": [], "偏债": []}
     for r in candidates:
-        s = _classify_sector(r["conv_prem"])
+        s = _classify_sector(r.get("bs_delta"))
         sector_groups[s].append(r)
 
     sector_picks = []
@@ -142,7 +145,7 @@ def main():
         n_sector = len(group)
         for i, row in enumerate(top_s):
             row["strategy"] = f"双低-{sector_name}"
-            row["note"] = f"{sector_name}({n_sector}只) 转股溢价率{row['conv_prem']:.1f}%，价格{row['latest']:.1f}"
+            row["note"] = f"{sector_name}({n_sector}只) Delta={row.get('bs_delta',0):.2f}，价格{row['latest']:.1f}"
             sector_picks.append(row)
         print(f"[sector] {sector_name}: {n_sector} candidates, top {len(top_s)}")
 
@@ -178,7 +181,7 @@ def main():
                     "name": r["name"],
                     "ucode": r.get("ucode", ""),
                     "uname": r.get("uname", ""),
-                    "sector": _classify_sector(r["conv_prem"]),
+                    "sector": _classify_sector(r.get("bs_delta")),
                     "rank_conv_prem": 0,
                     "rank_price": 0,
                     "rank_overall": float(i + 1),

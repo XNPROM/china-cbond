@@ -167,12 +167,13 @@ def main():
     conv_values = [r["conv_prem"] for r in rows if r.get("conv_prem") is not None]
     pure_values = [r["pure_prem"] for r in rows if r.get("pure_prem") is not None]
     rv_values = [r["relative_value"] for r in rows if r.get("relative_value") is not None and 0.5 <= r["relative_value"] <= 3.0]
+    delta_values = [r["bs_delta"] for r in rows if r.get("bs_delta") is not None]
     top_themes = Counter(r["primary_theme"] for r in rows).most_common(10)
 
-    # Sector classification counts
-    n_equity = sum(1 for v in conv_values if v < 20)
-    n_balanced = sum(1 for v in conv_values if 20 <= v < 50)
-    n_debt = sum(1 for v in conv_values if v >= 50)
+    # Sector classification by Delta
+    n_equity = sum(1 for d in delta_values if d >= 0.7)
+    n_balanced = sum(1 for d in delta_values if 0.4 <= d < 0.7)
+    n_debt = sum(1 for d in delta_values if d < 0.4)
 
     lines = []
     lines.append(f"# 可转债概览 · {args.title_date}")
@@ -193,9 +194,9 @@ def main():
     # Strategy picks section
     STRAT_DESC = {
         "双低": "经典双低：PE>0 + 波动率>Q1，按 1.5×rank(转股溢价率) + rank(价格) 排名",
-        "双低-偏股": "分域双低·偏股型（转股溢价率<20%）：域内独立双低排名",
-        "双低-平衡": "分域双低·平衡型（20%≤转股溢价率<50%）：域内独立双低排名",
-        "双低-偏债": "分域双低·偏债型（转股溢价率≥50%）：域内独立双低排名",
+        "双低-偏股": "分域双低·偏股型（Delta>=0.7）：域内独立双低排名",
+        "双低-平衡": "分域双低·平衡型（0.4<=Delta<0.7）：域内独立双低排名",
+        "双低-偏债": "分域双低·偏债型（Delta<0.4）：域内独立双低排名",
         "低估": "相对价值策略：市价/BS理论价值最低，低于1=低估",
     }
     lines.append("")
@@ -282,7 +283,7 @@ def main():
     lines.append("- 纯债YTM：纯债到期收益率（%），负值表示转债价格高于纯债价值到期可收回金额。")
     lines.append("- 相对价值：市价 / BS理论价值。低于1=低估，高于1.2=高估。BS理论价值=BS看涨期权+纯债价值，不含赎回/下修条款。")
     lines.append("- Delta：BS模型正股敏感度。0=纯债属性，1=纯股属性，0.3-0.7=平衡型。")
-    lines.append("- 分域：偏股（转股溢价率<20%）、平衡（20-50%）、偏债（≥50%）。")
+    lines.append("- 分域：偏股（Delta>=0.7）、平衡（0.4<=Delta<0.7）、偏债（Delta<0.4）。Delta 衡量正股变动对转债价格的传导率。")
     lines.append("- 强赎：空=尚未触发且无不强赎承诺；'不强赎至XX'=发行人承诺不强赎至该日；'已触发N天'=正股收盘价已连续N天超过转股价×强赎触发比例。")
     lines.append("- 下修：'触发≤N%'=正股收盘价低于转股价×N%时可触发下修。")
     lines.append(f"- 数据时点：{args.title_date} 收盘。")

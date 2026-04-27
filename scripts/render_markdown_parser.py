@@ -220,7 +220,7 @@ def build_category_index(sections):
 
 def compute_kpi_metrics(report):
     all_cards = [c for s in report["sections"] for c in s["cards"]]
-    prices, convs, rvs = [], [], []
+    prices, convs, rvs, deltas = [], [], [], []
     for c in all_cards:
         try:
             prices.append(float(c.get("price", "0").replace(",", "")))
@@ -236,6 +236,12 @@ def compute_kpi_metrics(report):
                 rvs.append(rv)
         except (ValueError, TypeError):
             pass
+        try:
+            d = float(c.get("delta", "0"))
+            if 0 <= d <= 1:
+                deltas.append(d)
+        except (ValueError, TypeError):
+            pass
 
     n = len(all_cards)
     return {
@@ -244,9 +250,9 @@ def compute_kpi_metrics(report):
         "median_conv": round(sorted(convs)[len(convs) // 2], 1) if convs else 0,
         "median_rv": round(sorted(rvs)[len(rvs) // 2], 2) if rvs else 0,
         "undervalued": sum(1 for v in rvs if v < 1.0),
-        "n_equity": sum(1 for v in convs if v < 20),
-        "n_balanced": sum(1 for v in convs if 20 <= v < 50),
-        "n_debt": sum(1 for v in convs if v >= 50),
+        "n_equity": sum(1 for d in deltas if d >= 0.7),
+        "n_balanced": sum(1 for d in deltas if 0.4 <= d < 0.7),
+        "n_debt": sum(1 for d in deltas if d < 0.4),
     }
 
 
