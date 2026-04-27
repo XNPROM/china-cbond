@@ -1,10 +1,10 @@
-name: Deploy Report to GitHub Pages
+name: Deploy to GitHub Pages
 
 on:
   push:
     branches: [main]
     paths:
-      - 'reports/**'
+      - 'docs/**'
   workflow_dispatch:
 
 permissions:
@@ -24,17 +24,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Find latest report
-        id: report
-        run: |
-          LATEST=$(ls -d reports/20* | sort | tail -1)
-          DATE=$(basename "$LATEST")
-          echo "date=$DATE" >> $GITHUB_OUTPUT
-          echo "report_dir=$LATEST" >> $GITHUB_OUTPUT
       - name: Prepare Pages artifact
         run: |
           mkdir -p _site
-          cp "${{ steps.report.outputs.report_dir }}/cbond_overview.html" _site/index.html
+          cp docs/index.html _site/index.html
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
       - name: Deploy to GitHub Pages
