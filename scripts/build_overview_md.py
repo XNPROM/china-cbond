@@ -219,7 +219,9 @@ def main():
     lines.append("")
     lines.append("## 摘要")
     lines.append(f"- 总数 {len(rows)} 只；{sum(1 for v in price_values if v > 130)} 只价格 >130，{sum(1 for v in price_values if v < 90)} 只价格 <90")
-    lines.append(f"- 转股溢价率中位数 {statistics.median(conv_values):.2f}%，纯债溢价率中位数 {statistics.median(pure_values):.2f}%")
+    conv_med = f"{statistics.median(conv_values):.2f}%" if conv_values else "N/A"
+    pure_med = f"{statistics.median(pure_values):.2f}%" if pure_values else "N/A"
+    lines.append(f"- 转股溢价率中位数 {conv_med}，纯债溢价率中位数 {pure_med}")
     lines.append("- 按题材分布（Top 10）：" + " / ".join(f"{name}({cnt})" for name, cnt in top_themes))
     lines.append(f"- HTML 支持“概览 / 策略”页签切换；独立页见 [→ 今日策略推荐]({args.strategy_page})")
     lines.append("")
