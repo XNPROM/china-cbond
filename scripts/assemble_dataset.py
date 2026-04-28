@@ -31,7 +31,11 @@ SELECT
   v.redemp_stop_date,
   v.pe_ttm,
   v.total_mv_yi,
-  v.pure_bond_ytm,
+  COALESCE(v.pure_bond_ytm, (
+    SELECT v2.pure_bond_ytm FROM valuation_daily v2
+    WHERE v2.code = u.code AND v2.trade_date < ? AND v2.pure_bond_ytm IS NOT NULL
+    ORDER BY v2.trade_date DESC LIMIT 1
+  )) AS pure_bond_ytm,
   v.ifind_doublelow,
   v.option_value,
   v.surplus_days,
@@ -66,7 +70,7 @@ def main():
     args = ap.parse_args()
 
     con = connect()
-    rows = con.execute(QUERY, [args.trade_date, args.trade_date]).fetchall()
+    rows = con.execute(QUERY, [args.trade_date, args.trade_date, args.trade_date]).fetchall()
     cols = [d[0] for d in con.description]
     con.close()
 

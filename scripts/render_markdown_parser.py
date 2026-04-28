@@ -158,7 +158,7 @@ def parse_card(lines, start_idx):
         "balance": metrics.get("余额(亿)", ""),
         "rating": metrics.get("评级", ""),
         "maturity": metrics.get("到期", ""),
-        "surplus_years": metrics.get("剩余(年)", ""),
+        "surplus_years": metrics.get("剩余年限", ""),
         "conv_price": metrics.get("转股价", ""),
         "pe_ttm": metrics.get("PE", ""),
         "pb": metrics.get("PB", ""),

@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/database-DuckDB-yellow" alt="DuckDB">
   <img src="https://img.shields.io/badge/data-iFinD%20API-orange" alt="iFinD">
-  <img src="https://img.shields.io/badge/frontend-ECharts%20%2B%20Jinja2-green" alt="ECharts">
+  <img src="https://img.shields.io/badge/frontend-SVG%20%2B%20Jinja2-green" alt="SVG + Jinja2">
 </p>
 
 ---
@@ -23,7 +23,7 @@
 - **多策略选券** -- 经典双低、分域双低（偏股/平衡/偏债）、低估策略三套体系
 - **题材分类** -- 基于正股主营业务文本的确定性关键词规则引擎，覆盖 ~85 个板块标签
 - **回测引擎** -- 周度再平衡回测，支持 T+1 入场、交易成本、乘法复利
-- **交互报告** -- 暗色/亮色主题切换的单文件 HTML 仪表盘（ECharts 图表、排序筛选、CSV 导出）
+- **交互报告** -- 暗色/亮色主题切换的单文件 HTML 仪表盘（原生 SVG 回测曲线、排序筛选、CSV 导出）
 
 最终产物为一份 **自包含的 HTML 文件**，可直接浏览器打开或通过 GitHub Pages 发布。
 
@@ -345,7 +345,7 @@ python scripts/backtest_weekly.py \
 | **KPI 概览** | 总数、均价、中位溢价率、中位相对价值、低估数、板块分布 |
 | **散点图** | 转股溢价率 vs 价格散点，按板块着色，相对价值色标 |
 | **策略面板** | 双低/分域双低/低估策略推荐表格 |
-| **回测净值** | ECharts 绘制双低/分域双低/低估/中证转债四类净值曲线（含 dataZoom） |
+| **回测净值** | 原生 SVG 绘制双低/分域双低/低估/中证转债净值曲线，离线打开也能显示 |
 | **列排序** | 点击表头排序（升序 --> 降序 --> 默认三态切换） |
 | **文本搜索** | 实时搜索债券名称、正股名称、代码、题材 |
 | **题材筛选** | 下拉多选题材标签过滤 |
@@ -440,7 +440,7 @@ china-cbond/
     render_html.py                    # HTML 渲染
     backtest_weekly.py                # 回测引擎
     static/
-      app.js                          # 前端交互逻辑 (ECharts/排序/筛选/导出)
+      app.js                          # 前端交互逻辑 (SVG 回测/排序/筛选/导出)
       style.css                       # 样式 (暗色+亮色主题)
     templates/
       base.html.j2                    # Jinja2 HTML 模板

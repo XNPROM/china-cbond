@@ -575,10 +575,21 @@ def _build_business_rewrite(uname: str, profile: str, themes):
     return "".join(sentence for sentence in sentences if sentence)
 
 
+# Short pure-ASCII keywords (2–4 chars) require word-boundary isolation to
+# avoid false positives like "AR" matching inside "AWARDS" or "BUSBAR".
+_SHORT_ASCII_KW = re.compile(r'^[A-Za-z0-9]{2,4}$')
+
+
+def _kw_match(kw: str, text: str) -> bool:
+    if _SHORT_ASCII_KW.match(kw):
+        return bool(re.search(r'(?<![A-Za-z0-9])' + re.escape(kw) + r'(?![A-Za-z0-9])', text))
+    return kw in text
+
+
 def _score_themes(text: str):
     scores = []
     for theme, keywords in THEME_RULES:
-        hits = sum(1 for kw in keywords if kw in text)
+        hits = sum(1 for kw in keywords if _kw_match(kw, text))
         if hits > 0:
             scores.append((theme, hits))
     scores.sort(key=lambda x: (-x[1], x[0]))

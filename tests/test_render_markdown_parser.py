@@ -46,6 +46,19 @@ class ParseMarkdownTests(unittest.TestCase):
         self.assertEqual(card["themes"], ["建筑装饰-设计施工", "电力-新能源运营"])
         self.assertEqual(card["sparkline"]["delta"], [0.658, 0.789])
 
+    def test_parses_surplus_years_from_current_header(self):
+        markdown = SAMPLE_MARKDOWN.replace(
+            "纯债YTM | 余额(亿)",
+            "纯债YTM | 剩余年限 | 余额(亿)",
+        ).replace(
+            "-8.82% | 20.00",
+            "-8.82% | 2.86 | 20.00",
+        )
+        report = parse_markdown(markdown)
+
+        card = report["sections"][0]["cards"][0]
+        self.assertEqual(card["surplus_years"], "2.86")
+
 
 if __name__ == "__main__":
     unittest.main()

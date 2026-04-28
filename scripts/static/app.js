@@ -22,7 +22,15 @@
   const $$ = selector => Array.from(document.querySelectorAll(selector));
 
   let radarChart = null;
-  let equityChart = null;
+
+  const BACKTEST_SERIES = [
+    { key: "cum_dl", label: "双低 Top10", color: "#1d4ed8", width: 3 },
+    { key: "cum_equity", label: "偏股双低", color: "#dc2626", width: 2 },
+    { key: "cum_balanced", label: "平衡双低", color: "#a16207", width: 2 },
+    { key: "cum_debt", label: "偏债双低", color: "#059669", width: 2 },
+    { key: "cum_rv", label: "低估 Top10", color: "#7c3aed", width: 2 },
+    { key: "cum_bench", label: "中证转债", color: "#6b7280", width: 2, dash: "6 5" },
+  ];
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -52,6 +60,25 @@
     if (metric == null) return "--";
     if (typeof metric === "object" && "text" in metric) return metric.text || "--";
     return String(metric);
+  }
+
+  function formatBacktestDate(value) {
+    const text = String(value || "");
+    if (/^\d{8}$/.test(text)) return `${text.slice(4, 6)}-${text.slice(6, 8)}`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.slice(5);
+    return text;
+  }
+
+  function formatBacktestTooltipDate(value) {
+    const text = String(value || "");
+    if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+    return text;
+  }
+
+  function formatPct(value, digits = 2) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "--";
+    return `${(num * 100).toFixed(digits)}%`;
   }
 
   function signedClass(metric) {
@@ -565,88 +592,147 @@
     const chartEl = $("#equityChart");
     const payload = VIEW_MODEL.backtest;
     if (!chartEl || !payload || !payload.equity_curve || payload.equity_curve.length < 2) return;
-    if (typeof echarts === "undefined") return;
-    if (!equityChart) {
-      equityChart = echarts.init(chartEl, null, { renderer: "canvas" });
-      window.addEventListener("resize", () => equityChart && equityChart.resize());
-    }
     const curve = payload.equity_curve;
-    equityChart.setOption({
-      grid: { left: 52, right: 24, top: 30, bottom: 36 },
-      tooltip: {
-        trigger: "axis",
-        backgroundColor: "rgba(255,255,255,0.96)",
-        borderColor: "rgba(139,124,94,0.18)",
-        borderWidth: 1,
-        textStyle: { color: "#1f2937" },
-        valueFormatter: value => `${(value * 100).toFixed(2)}%`,
-      },
-      legend: {
-        top: 0,
-        textStyle: { color: "#536072" },
-      },
-      xAxis: {
-        type: "category",
-        data: curve.map(point => point.date),
-        axisLabel: { color: "#536072" },
-        axisLine: { lineStyle: { color: "rgba(139,124,94,0.2)" } },
-      },
-      yAxis: {
-        type: "value",
-        axisLabel: { color: "#536072", formatter: value => `${(value * 100).toFixed(1)}%` },
-        splitLine: { lineStyle: { color: "rgba(139,124,94,0.14)" } },
-      },
-      series: [
-        {
-          name: "双低 Top10",
-          type: "line",
-          smooth: true,
-          symbol: "none",
-          lineStyle: { width: 3, color: "#1d4ed8" },
-          areaStyle: { color: "rgba(29,78,216,0.10)" },
-          data: curve.map(point => point.cum_dl),
-        },
-        {
-          name: "偏股双低",
-          type: "line",
-          smooth: true,
-          symbol: "none",
-          lineStyle: { width: 2, color: "#dc2626" },
-          data: curve.map(point => point.cum_equity),
-        },
-        {
-          name: "平衡双低",
-          type: "line",
-          smooth: true,
-          symbol: "none",
-          lineStyle: { width: 2, color: "#a16207" },
-          data: curve.map(point => point.cum_balanced),
-        },
-        {
-          name: "偏债双低",
-          type: "line",
-          smooth: true,
-          symbol: "none",
-          lineStyle: { width: 2, color: "#059669" },
-          data: curve.map(point => point.cum_debt),
-        },
-        {
-          name: "低估 Top10",
-          type: "line",
-          smooth: true,
-          symbol: "none",
-          lineStyle: { width: 2, color: "#7c3aed" },
-          data: curve.map(point => point.cum_rv),
-        },
-        {
-          name: "中证转债",
-          type: "line",
-          smooth: true,
-          symbol: "none",
-          lineStyle: { width: 2, type: "dashed", color: "#6b7280" },
-          data: curve.map(point => point.cum_bench),
-        },
-      ],
+
+    const width = 980;
+    const height = 340;
+    const margin = { top: 58, right: 24, bottom: 42, left: 58 };
+    const plotW = width - margin.left - margin.right;
+    const plotH = height - margin.top - margin.bottom;
+    const values = [];
+    curve.forEach(point => {
+      BACKTEST_SERIES.forEach(series => {
+        const value = Number(point[series.key]);
+        if (Number.isFinite(value)) values.push(value);
+      });
+    });
+    if (!values.length) {
+      chartEl.innerHTML = '<div class="empty-state"><h3>暂无回测曲线</h3><p>当前回测数据没有可绘制的净值序列。</p></div>';
+      return;
+    }
+
+    let minY = Math.min(0, ...values);
+    let maxY = Math.max(0, ...values);
+    const span = maxY - minY || 0.02;
+    minY -= span * 0.12;
+    maxY += span * 0.12;
+
+    const xAt = index => margin.left + (curve.length === 1 ? 0 : (index / (curve.length - 1)) * plotW);
+    const yAt = value => margin.top + ((maxY - value) / (maxY - minY)) * plotH;
+    const yTicks = Array.from({ length: 5 }, (_, i) => minY + ((maxY - minY) * i) / 4);
+    const xStep = Math.max(1, Math.ceil(curve.length / 6));
+    const xTicks = curve
+      .map((point, index) => ({ point, index }))
+      .filter(({ index }) => index === 0 || index === curve.length - 1 || index % xStep === 0);
+
+    const pathFor = series => {
+      const commands = [];
+      let drawing = false;
+      curve.forEach((point, index) => {
+        const value = Number(point[series.key]);
+        if (!Number.isFinite(value)) {
+          drawing = false;
+          return;
+        }
+        commands.push(`${drawing ? "L" : "M"}${xAt(index).toFixed(2)},${yAt(value).toFixed(2)}`);
+        drawing = true;
+      });
+      return commands.join(" ");
+    };
+
+    const yGrid = yTicks.map(value => {
+      const y = yAt(value);
+      return `
+        <line class="backtest-grid" x1="${margin.left}" y1="${y.toFixed(2)}" x2="${width - margin.right}" y2="${y.toFixed(2)}"></line>
+        <text class="backtest-axis-label" x="${margin.left - 10}" y="${(y + 4).toFixed(2)}" text-anchor="end">${formatPct(value, 1)}</text>
+      `;
+    }).join("");
+    const xLabels = xTicks.map(({ point, index }) => `
+      <text class="backtest-axis-label" x="${xAt(index).toFixed(2)}" y="${height - 14}" text-anchor="middle">${escapeHtml(formatBacktestDate(point.date))}</text>
+    `).join("");
+    const legend = BACKTEST_SERIES.map((series, index) => {
+      const col = index % 3;
+      const row = Math.floor(index / 3);
+      const x = margin.left + col * 150;
+      const y = 20 + row * 22;
+      return `
+        <g class="backtest-legend-item" transform="translate(${x},${y})">
+          <line x1="0" y1="0" x2="26" y2="0" stroke="${series.color}" stroke-width="${series.width}" stroke-dasharray="${series.dash || ""}" stroke-linecap="round"></line>
+          <text x="34" y="4">${escapeHtml(series.label)}</text>
+        </g>
+      `;
+    }).join("");
+    const paths = BACKTEST_SERIES.map(series => `
+      <path class="backtest-line" d="${pathFor(series)}" fill="none" stroke="${series.color}" stroke-width="${series.width}" stroke-dasharray="${series.dash || ""}" stroke-linecap="round" stroke-linejoin="round"></path>
+    `).join("");
+    const hoverCircles = BACKTEST_SERIES.map(series => `
+      <circle class="backtest-hover-point" data-hover-key="${series.key}" r="4.5" fill="${series.color}"></circle>
+    `).join("");
+
+    chartEl.innerHTML = `
+      <svg class="backtest-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="策略回测净值曲线">
+        <g>${yGrid}</g>
+        <line class="backtest-axis" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>
+        <line class="backtest-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
+        ${xLabels}
+        <line class="backtest-zero-line" x1="${margin.left}" y1="${yAt(0).toFixed(2)}" x2="${width - margin.right}" y2="${yAt(0).toFixed(2)}"></line>
+        <g>${legend}</g>
+        <g>${paths}</g>
+        <g class="backtest-hover-layer" hidden>
+          <line class="backtest-hover-line" x1="0" y1="${margin.top}" x2="0" y2="${height - margin.bottom}"></line>
+          ${hoverCircles}
+        </g>
+        <rect class="backtest-hit-area" x="${margin.left}" y="${margin.top}" width="${plotW}" height="${plotH}"></rect>
+      </svg>
+      <div class="backtest-tooltip" hidden></div>
+    `;
+
+    const svg = chartEl.querySelector("svg");
+    const hitArea = chartEl.querySelector(".backtest-hit-area");
+    const hoverLayer = chartEl.querySelector(".backtest-hover-layer");
+    const hoverLine = chartEl.querySelector(".backtest-hover-line");
+    const tooltip = chartEl.querySelector(".backtest-tooltip");
+    const circles = new Map(Array.from(chartEl.querySelectorAll(".backtest-hover-point")).map(circle => [circle.dataset.hoverKey, circle]));
+
+    hitArea.addEventListener("mousemove", event => {
+      const rect = svg.getBoundingClientRect();
+      const svgX = ((event.clientX - rect.left) / rect.width) * width;
+      const index = Math.max(0, Math.min(curve.length - 1, Math.round(((svgX - margin.left) / plotW) * (curve.length - 1))));
+      const point = curve[index];
+      const x = xAt(index);
+      hoverLayer.removeAttribute("hidden");
+      hoverLine.setAttribute("x1", x.toFixed(2));
+      hoverLine.setAttribute("x2", x.toFixed(2));
+      BACKTEST_SERIES.forEach(series => {
+        const circle = circles.get(series.key);
+        const value = Number(point[series.key]);
+        if (!circle || !Number.isFinite(value)) {
+          if (circle) circle.setAttribute("display", "none");
+          return;
+        }
+        circle.removeAttribute("display");
+        circle.setAttribute("cx", x.toFixed(2));
+        circle.setAttribute("cy", yAt(value).toFixed(2));
+      });
+      const lines = BACKTEST_SERIES.map(series => {
+        const value = Number(point[series.key]);
+        return `
+          <div class="backtest-tooltip-row">
+            <span><i style="background:${series.color}"></i>${escapeHtml(series.label)}</span>
+            <strong>${formatPct(value)}</strong>
+          </div>
+        `;
+      }).join("");
+      tooltip.hidden = false;
+      tooltip.innerHTML = `<div class="backtest-tooltip-date">${escapeHtml(formatBacktestTooltipDate(point.date))}</div>${lines}`;
+      const cssX = (x / width) * rect.width;
+      const maxTooltipLeft = Math.max(12, rect.width - 190);
+      tooltip.style.left = `${Math.min(maxTooltipLeft, Math.max(12, cssX + 14))}px`;
+      tooltip.style.top = `${Math.max(12, event.clientY - rect.top - 20)}px`;
+    });
+    hitArea.addEventListener("mouseleave", () => {
+      hoverLayer.setAttribute("hidden", "");
+      tooltip.hidden = true;
     });
   }
 

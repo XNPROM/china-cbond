@@ -30,9 +30,7 @@ TODO_*.md
 sample_*.md
 cbond_overview_*.md
 cbond_overview_*.html
-reports/2026-04-20/
-reports/2026-04-22/
-reports/2026-04-23/
+reports/
 
 # Deprecated remote deploy directory
 docs/

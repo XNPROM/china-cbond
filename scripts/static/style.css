@@ -303,6 +303,111 @@ body::before {
   height: 340px;
 }
 
+.backtest-panel .chart-stage {
+  position: relative;
+  min-height: 340px;
+}
+
+.backtest-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 340px;
+  overflow: visible;
+}
+
+.backtest-grid {
+  stroke: rgba(139, 124, 94, 0.14);
+  stroke-width: 1;
+}
+
+.backtest-axis {
+  stroke: rgba(139, 124, 94, 0.24);
+  stroke-width: 1;
+}
+
+.backtest-zero-line {
+  stroke: rgba(31, 41, 55, 0.18);
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}
+
+.backtest-axis-label,
+.backtest-legend-item text {
+  fill: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.backtest-line {
+  filter: drop-shadow(0 2px 4px rgba(31, 41, 55, 0.12));
+}
+
+.backtest-hit-area {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.backtest-hover-line {
+  stroke: rgba(31, 41, 55, 0.3);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+
+.backtest-hover-layer[hidden] {
+  display: none;
+}
+
+.backtest-hover-point {
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.backtest-tooltip {
+  position: absolute;
+  z-index: 5;
+  min-width: 176px;
+  padding: 10px 12px;
+  border: 1px solid rgba(139, 124, 94, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 16px 35px rgba(31, 41, 55, 0.14);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.backtest-tooltip-date {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.backtest-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.backtest-tooltip-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-soft);
+}
+
+.backtest-tooltip-row i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.backtest-tooltip-row strong {
+  font-variant-numeric: tabular-nums;
+}
+
 .market-side {
   display: grid;
   gap: 14px;
