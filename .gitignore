@@ -30,7 +30,16 @@ TODO_*.md
 sample_*.md
 cbond_overview_*.md
 cbond_overview_*.html
-reports/
+# reports/ — md is source (committed), html is CI output (not tracked)
+reports/*/cbond_overview.html
+reports/*/cbond_strategy.html
+reports/*/cbond_strategy.md
+reports/index.html
+# Old pre-LLM-theme reports — superseded
+reports/2026-04-20/
+reports/2026-04-22/
+reports/2026-04-23/
+reports/2026-04-24/
 
 # Deprecated remote deploy directory
 docs/

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, developer-1]
     paths:
-      - 'reports/**'
+      - 'reports/*/cbond_overview.md'
   workflow_dispatch:
 
 permissions:
@@ -17,37 +17,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare Pages artifact
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Render HTML reports from Markdown
+        run: |
+          for md in reports/????-??-??/cbond_overview.md; do
+            [ -f "$md" ] || continue
+            date=$(basename "$(dirname "$md")")
+            out="reports/$date/cbond_overview.html"
+            python scripts/render_html.py \
+              --in  "$md" \
+              --out "$out" \
+              --title "可转债概览 · $date" \
+              --trade-date "$date"
+            echo "rendered: $out"
+          done
+
+      - name: Assemble _site
         run: |
           mkdir -p _site
-          # Copy every dated report (overview + strategy) preserving directory structure
-          for dir in reports/20*/; do
+          for dir in reports/????-??-??/; do
             date=$(basename "$dir")
             mkdir -p "_site/$date"
-            if [ -f "$dir/cbond_overview.html" ]; then
-              cp "$dir/cbond_overview.html" "_site/$date/index.html"
-            fi
-            if [ -f "$dir/cbond_strategy.html" ]; then
-              cp "$dir/cbond_strategy.html" "_site/$date/cbond_strategy.html"
-            fi
+            [ -f "$dir/cbond_overview.html" ] && cp "$dir/cbond_overview.html" "_site/$date/index.html"
           done
-          # Latest report becomes root index.html
-          LATEST=$(ls -d reports/20*/ 2>/dev/null | sort | tail -1)
+          LATEST=$(ls -d reports/????-??-??/ 2>/dev/null | sort | tail -1)
           if [ -n "$LATEST" ] && [ -f "${LATEST}cbond_overview.html" ]; then
             cp "${LATEST}cbond_overview.html" _site/index.html
-            if [ -f "${LATEST}cbond_strategy.html" ]; then
-              cp "${LATEST}cbond_strategy.html" _site/cbond_strategy.html
-            fi
           fi
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
