@@ -98,6 +98,15 @@ def fetch_universe(date_ymd):
     excluded = before - len(bonds)
     if excluded:
         print(f"[filter] excluded {excluded} non-exchange bonds (北交所/新三板/定向)")
+
+    # Exclude 定向转债 that share code prefix with public bonds but are privately placed.
+    # Name pattern: ends in 定+digit (e.g. 九丰定01), vs public bonds which end in 转债.
+    _DING = re.compile(r'定\d')
+    before = len(bonds)
+    bonds = [b for b in bonds if not _DING.search(b.get("name", ""))]
+    excluded = before - len(bonds)
+    if excluded:
+        print(f"[filter] excluded {excluded} 定向转债 by name pattern")
     return bonds
 
 
