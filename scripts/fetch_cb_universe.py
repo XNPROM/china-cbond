@@ -19,6 +19,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -87,6 +88,16 @@ def fetch_universe(date_ymd):
             "guarantee":     _safe(tbl.get("p05479_f004", []), i),   # 是否担保
             "prospectus":    _safe(tbl.get("p05479_f036", []), i),   # 募集说明摘要
         })
+
+    # Keep only main-board exchange bonds with continuous auction pricing.
+    # Valid prefixes: SH 110/113/118, SZ 123/127/128.
+    # Excludes: 810xxx (北交所/新三板定转), 145xxx (非标定向转债), etc.
+    _VALID = re.compile(r'^(11[038]\d{3}\.(SH|SZ)|12[378]\d{3}\.(SH|SZ))$')
+    before = len(bonds)
+    bonds = [b for b in bonds if _VALID.match(b.get("code", ""))]
+    excluded = before - len(bonds)
+    if excluded:
+        print(f"[filter] excluded {excluded} non-exchange bonds (北交所/新三板/定向)")
     return bonds
 
 
