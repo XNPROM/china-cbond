@@ -3,10 +3,13 @@
 Usage:
   python3 scripts/assemble_dataset.py --trade-date 2026-04-22 --out data/raw/asof=2026-04-22/dataset.json
 """
-import argparse, json, os, sys
+import argparse, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect
+
+
+_PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
 
 
 QUERY = """
@@ -75,15 +78,30 @@ def main():
     con.close()
 
     items = [dict(zip(cols, row)) for row in rows]
+    # Filter out privately placed CBs that are not part of the public tradable pool.
+    before = len(items)
+    items = [it for it in items if not _PRIVATE_CB_RE.search(it.get("name") or "")]
+    private = before - len(items)
+    if private:
+        print(f"[filter] excluded {private} private-placement bonds")
+
     # Filter out unlisted bonds (list_date IS NULL means not yet listed)
     before = len(items)
     items = [it for it in items if it.get("list_date")]
     unlisted = before - len(items)
     if unlisted:
         print(f"[filter] excluded {unlisted} unlisted bonds (list_date IS NULL)")
+    # Exclude bonds whose listing date is after the snapshot date.
+    trade_ymd = args.trade_date.replace("-", "")
+    before = len(items)
+    items = [it for it in items if (it.get("list_date") or "") <= trade_ymd]
+    future_listed = before - len(items)
+    if future_listed:
+        print(f"[filter] excluded {future_listed} not-yet-listed bonds (list_date > trade_date)")
+
     # Filter out force-redeemed bonds (redemp_stop_date <= trade_date means already stopped trading)
     before = len(items)
-    items = [it for it in items if not (it.get("redemp_stop_date") and it["redemp_stop_date"] <= args.trade_date.replace("-", ""))]
+    items = [it for it in items if not (it.get("redemp_stop_date") and it["redemp_stop_date"] <= trade_ymd)]
     filtered = before - len(items)
     if filtered:
         print(f"[filter] excluded {filtered} force-redeemed bonds")

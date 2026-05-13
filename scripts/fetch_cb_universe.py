@@ -100,8 +100,8 @@ def fetch_universe(date_ymd):
         print(f"[filter] excluded {excluded} non-exchange bonds (北交所/新三板/定向)")
 
     # Exclude 定向转债 that share code prefix with public bonds but are privately placed.
-    # Name pattern: ends in 定+digit (e.g. 九丰定01), vs public bonds which end in 转债.
-    _DING = re.compile(r'定\d')
+    # Name patterns include 定转, 定01, 定02, etc.
+    _DING = re.compile(r'(定转|定\d+)')
     before = len(bonds)
     bonds = [b for b in bonds if not _DING.search(b.get("name", ""))]
     excluded = before - len(bonds)
@@ -136,7 +136,7 @@ def save_to_db(bonds, date_ymd):
             [t for t in [b["sw_l1"], b["sw_l2"], b["sw_l3"]] if t],
             ensure_ascii=False
         ),
-        "business_rewrite": (b["prospectus"] or "")[:200],
+        "business_rewrite": "",
         "industry": b["sw_l1"] or "",
     } for b in bonds]
     n_t = db_upsert(con, "themes", theme_rows, ["trade_date", "code"])

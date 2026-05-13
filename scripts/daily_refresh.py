@@ -170,6 +170,8 @@ def main():
     overview_md = os.path.join(report_dir, "cbond_overview.md")
     overview_html = os.path.join(report_dir, "cbond_overview.html")
     strategy_jsonl = os.path.join(raw_dir, "strategy_picks.jsonl")
+    themes_jsonl = os.path.join(raw_dir, "themes.jsonl")
+    themes_progress = os.path.join(raw_dir, "themes_rewrite_progress.jsonl")
     strategy_md = os.path.join(report_dir, "cbond_strategy.md")
     # backtest_weekly.py writes to asof=YYYYMMDD (no dashes), matching upstream
     backtest_json = os.path.join(cwd, "data", "raw", f"asof={trade_date.replace('-', '')}", "backtest_weekly.json")
@@ -233,6 +235,14 @@ def main():
     ], cwd)
 
     _ensure_themes(trade_date)
+
+    _run_step(trade_date, "generate_themes_direct", [
+        PY, "scripts/generate_themes_direct.py",
+        "--dataset", dataset,
+        "--out", themes_jsonl,
+        "--trade-date", trade_date,
+        "--progress-log", themes_progress,
+    ], cwd)
 
     _run_step(trade_date, "build_overview_md", [
         PY, "scripts/build_overview_md.py",

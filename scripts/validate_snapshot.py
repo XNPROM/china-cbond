@@ -7,10 +7,14 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect
+
+
+PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
 
 
 VALUATION_CRITICAL = [
@@ -72,6 +76,19 @@ def validate(trade_date, dataset_path="", strict=False):
     theme_total = con.execute(
         "SELECT count(*) FROM themes WHERE trade_date = ?", [trade_date]
     ).fetchone()[0]
+    theme_bad_rows = con.execute(
+        """
+        SELECT code, business_rewrite
+          FROM themes
+         WHERE trade_date = ?
+           AND (
+             business_rewrite LIKE '本次债券募集资金%'
+             OR business_rewrite LIKE '%募集资金%用于%'
+           )
+        """,
+        [trade_date],
+    ).fetchall()
+    theme_bad_business = len(theme_bad_rows)
     strategy_total = con.execute(
         "SELECT count(*) FROM strategy_picks WHERE trade_date = ?", [trade_date]
     ).fetchone()[0]
@@ -86,6 +103,7 @@ def validate(trade_date, dataset_path="", strict=False):
     print(f"  valuation_daily: {val_total}")
     print(f"  vol_daily: {vol_total}")
     print(f"  themes: {theme_total}")
+    print(f"  themes bad business_rewrite: {theme_bad_business}")
     print(f"  strategy_picks: {strategy_total} {strategy_groups}")
 
     if universe_total < 250:
@@ -114,19 +132,37 @@ def validate(trade_date, dataset_path="", strict=False):
     dataset = _load_dataset(dataset_path)
     if dataset is not None:
         items = dataset.get("items", [])
+        dataset_codes = {x.get("code") for x in items}
+        dataset_bad_business = sum(1 for code, _ in theme_bad_rows if code in dataset_codes)
         print(f"  dataset: {len(items)} items ({dataset_path})")
         if len(items) < 250:
             failures.append(f"dataset too small: {len(items)}")
         missing_profile = sum(1 for x in items if not x.get("profile"))
         missing_vol = sum(1 for x in items if x.get("vol_20d") is None)
         missing_rv = sum(1 for x in items if x.get("relative_value") is None)
-        print(f"  dataset missing profile={missing_profile} vol={missing_vol} relative_value={missing_rv}")
+        private_cb = sum(1 for x in items if PRIVATE_CB_RE.search(x.get("name") or ""))
+        future_listed = sum(
+            1 for x in items
+            if x.get("list_date") and x["list_date"] > trade_date.replace("-", "")
+        )
+        print(
+            f"  dataset missing profile={missing_profile} vol={missing_vol} "
+            f"relative_value={missing_rv} private_cb={private_cb} future_listed={future_listed}"
+        )
         if missing_profile > len(items) * 0.05:
             failures.append(f"dataset profile missing too high: {missing_profile}")
         if missing_vol > len(items) * 0.05:
             failures.append(f"dataset vol missing too high: {missing_vol}")
         if missing_rv > len(items) * 0.20:
             warnings.append(f"dataset relative_value missing high: {missing_rv}")
+        if private_cb:
+            failures.append(f"dataset contains private-placement bonds: {private_cb}")
+        if future_listed:
+            failures.append(f"dataset contains not-yet-listed bonds: {future_listed}")
+        if dataset_bad_business:
+            failures.append(f"dataset themes business_rewrite appears to contain fundraising purpose: {dataset_bad_business}")
+    elif theme_bad_business:
+        failures.append(f"themes business_rewrite appears to contain fundraising purpose: {theme_bad_business}")
 
     if warnings:
         print("[warnings]")
