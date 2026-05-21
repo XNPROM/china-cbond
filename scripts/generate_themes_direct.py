@@ -408,171 +408,44 @@ def _clean_profile(text: str) -> str:
     return text.strip("。；;，, ") + "。"
 
 
-def _split_sentences(text: str):
-    return [s for s in re.split(r"[。；!?]", text) if s]
+def _load_business_cache(con):
+    """Load LLM-extracted main-business rows keyed by ucode."""
+    rows = con.execute(
+        "SELECT ucode, main_business, products_json, applications_json, "
+        "customers_json, position_evidence FROM underlying_business"
+    ).fetchall()
+    cache = {}
+    for ucode, mb, products_json, apps_json, cust_json, pos in rows:
+        cache[ucode] = {
+            "main_business": (mb or "").strip(),
+            "products": json.loads(products_json or "[]"),
+            "applications": json.loads(apps_json or "[]"),
+            "customers": json.loads(cust_json or "[]"),
+            "position_evidence": (pos or "").strip(),
+        }
+    return cache
 
 
-def _normalize_clause(text: str) -> str:
-    text = text.strip("：:，,；;。 ")
-    text = re.sub(r"^(公司的|公司|主营业务|主要产品或服务|主要产品)(是|为)?", "", text)
-    return text.strip("：:，,；;。 ")
-
-
-def _extract_clause(text: str, patterns):
-    for pattern in patterns:
-        m = re.search(pattern, text)
-        if m:
-            return _normalize_clause(m.group(1))
-    return ""
-
-
-def _extract_business(text: str) -> str:
-    clause = _extract_clause(text, [
-        r"主营业务(?:是|为)?(.*?)[。；]",
-        r"主要从事(.*?)[。；]",
-    ])
-    if clause:
-        return clause
-    sents = _split_sentences(text)
-    return _normalize_clause(sents[0]) if sents else ""
-
-
-def _extract_products(text: str) -> str:
-    clause = _extract_clause(text, [
-        r"主要产品或服务(?:是|为|包括|有)?(.*?)[。；]",
-        r"主要产品(?:是|为|包括|有)?(.*?)[。；]",
-    ])
-    if clause:
-        return clause
-    sents = _split_sentences(text)
-    for sent in sents[1:3]:
-        if "产品" in sent or "服务" in sent:
-            return _normalize_clause(sent)
-    return ""
-
-
-def _split_items(text: str):
-    if not text:
-        return []
-    normalized = text
-    for old, new in [("以及", "、"), ("及", "、"), ("和", "、"), ("或", "、"), ("/", "、"), ("；", "、"), ("，", "、"), ("(", "（"), (")", "）")]:
-        normalized = normalized.replace(old, new)
-    parts = [p.strip("、,，；; ") for p in normalized.split("、")]
-    return [p for p in parts if p]
-
-
-def _summarize_products(text: str, limit: int = 5) -> str:
-    items = _split_items(text)
-    if not items:
+def _build_business_rewrite(uname: str, cache_row):
+    """Compose business_rewrite from LLM cache. Returns '' if no cache hit."""
+    if not cache_row:
         return ""
-    deduped = []
-    for item in items:
-        if item not in deduped:
-            deduped.append(item)
-    brief = []
-    for item in deduped:
-        if len(brief) >= limit:
-            break
-        brief.append(item)
-    return "、".join(brief)
-
-
-def _normalize_text_snippet(text: str) -> str:
-    text = text.strip("：:，,；;。 ")
-    text = re.sub(r"^(公司|公司的|产品|业务|服务)(在|已|于|曾)?", "", text)
-    return text.strip("：:，,；;。 ")
-
-
-def _extract_by_patterns(text: str, patterns):
-    for pattern in patterns:
-        m = re.search(pattern, text)
-        if m:
-            clause = _normalize_text_snippet(m.group(1))
-            if clause:
-                return clause
-    return ""
-
-
-def _extract_application(text: str) -> str:
-    return _extract_by_patterns(text, [
-        r"(?:主要|产品)?(?:广泛)?应用于(.*?)[。；]",
-        r"下游(?:应用|覆盖)(.*?)[。；]",
-        r"主要用于(.*?)[。；]",
-        r"用于(.*?)[。；]",
-        r"服务于(.*?)[。；]",
-    ])
-
-
-def _extract_customers(text: str) -> str:
-    return _extract_by_patterns(text, [
-        r"客户(?:群体|类型|覆盖|包括|主要为)?(.*?)[。；]",
-        r"下游客户(?:包括|覆盖|主要为)?(.*?)[。；]",
-        r"面向(.*?客户.*?)[。；]",
-    ])
-
-
-def _extract_position_evidence(text: str) -> str:
-    checks = [
-        ("龙头", "公司在细分领域具备龙头地位。"),
-        ("制造业单项冠军", "公司获评制造业单项冠军。"),
-        ("国家级专精特新小巨人", "公司为国家级专精特新小巨人企业。"),
-        ("专精特新小巨人", "公司为专精特新小巨人企业。"),
-        ("隐形冠军", "公司在细分赛道具备隐形冠军特征。"),
-        ("单项冠军", "公司在细分产品领域具备较强竞争力。"),
-        ("国家企业技术中心", "公司拥有国家企业技术中心等研发平台。"),
-        ("工程研究中心", "公司拥有较强研发与工程化平台。"),
-        ("鲁班奖", "公司在工程交付与项目经验方面积累较深。"),
-        ("詹天佑奖", "公司在工程交付与项目经验方面积累较深。"),
-        ("红点设计奖", "公司产品设计与品牌化能力较强。"),
-        ("iF）设计奖", "公司产品设计与品牌化能力较强。"),
-        ("iF设计奖", "公司产品设计与品牌化能力较强。"),
-        ("领先", "公司在细分赛道处于行业较前列位置。"),
-        ("第一名", "公司在细分赛道处于行业较前列位置。"),
-        ("第一", "公司在细分赛道处于行业较前列位置。"),
-    ]
-    for needle, sentence in checks:
-        if needle in text:
-            return sentence
-    return ""
-
-
-def _infer_downstream(primary_theme: str, business: str, products: str) -> str:
-    return ""
-
-
-def _infer_position(text: str, primary_theme: str) -> str:
-    evidence = _extract_position_evidence(text)
-    return evidence if evidence else ""
-
-
-def _build_business_rewrite(uname: str, profile: str, themes):
-    primary_theme = themes[0] if themes else "其他综合"
-    business = _extract_business(profile)
-    products = _extract_products(profile)
-    product_summary = _summarize_products(products)
-    application = _extract_application(profile)
-    customers = _extract_customers(profile)
-
     sentences = []
-    if business and business != uname:
-        sentences.append(f"{uname}主营{business}。")
-
-    if product_summary:
-        sentences.append(f"核心产品包括{product_summary}等。")
-    elif products:
-        sentences.append(f"核心产品和服务覆盖{products}。")
-
-    if application:
-        sentences.append(f"产品主要应用于{application}。")
-    elif customers:
-        sentences.append(f"客户主要覆盖{customers}。")
-
-    position = _infer_position(profile, primary_theme)
-    if position:
-        sentences.append(position)
-    if not sentences and business:
-        sentences.append(f"{uname}主营{business}。")
-    return "".join(sentence for sentence in sentences if sentence)
+    mb = cache_row["main_business"]
+    if mb:
+        sentences.append(f"{uname}主营{mb}。")
+    prods = cache_row["products"][:5]
+    if prods:
+        sentences.append(f"核心产品包括{'、'.join(prods)}等。")
+    apps = cache_row["applications"][:5]
+    if apps:
+        sentences.append(f"产品主要应用于{'、'.join(apps)}。")
+    elif cache_row["customers"]:
+        sentences.append(f"客户主要覆盖{'、'.join(cache_row['customers'][:5])}。")
+    pos = cache_row["position_evidence"]
+    if pos:
+        sentences.append(pos if pos.endswith("。") else pos + "。")
+    return "".join(sentences)
 
 
 # Short pure-ASCII keywords (2–4 chars) require word-boundary isolation to
@@ -634,10 +507,11 @@ def main():
     progress_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_meta = {}
-    con = None
+    con = connect()
+    init_schema(con)
+    biz_cache = _load_business_cache(con)
+    print(f"[cache] underlying_business rows loaded: {len(biz_cache)}")
     if args.trade_date:
-        con = connect()
-        init_schema(con)
         rows_raw = con.execute(
             "SELECT code, all_themes_json, industry FROM themes WHERE trade_date = ?",
             [args.trade_date]
@@ -669,7 +543,7 @@ def main():
             row = {
                 "code": item["code"],
                 "industry": industry,
-                "business_rewrite": _build_business_rewrite(item["uname"], profile, themes),
+                "business_rewrite": _build_business_rewrite(item["uname"], biz_cache.get(item.get("ucode", ""))),
                 "themes": themes,
             }
             out.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -684,7 +558,7 @@ def main():
             })
             processed += 1
 
-            if con and len(batch_rows) >= args.save_every:
+            if args.trade_date and len(batch_rows) >= args.save_every:
                 n = db_upsert(con, "themes", batch_rows, ["trade_date", "code"])
                 progress.write(json.dumps({
                     "ts": datetime.utcnow().isoformat(),
@@ -697,7 +571,7 @@ def main():
                 print(f"[save] {processed}/{dataset['count']} rows saved to DB")
                 batch_rows = []
 
-        if con and batch_rows:
+        if args.trade_date and batch_rows:
             n = db_upsert(con, "themes", batch_rows, ["trade_date", "code"])
             progress.write(json.dumps({
                 "ts": datetime.utcnow().isoformat(),

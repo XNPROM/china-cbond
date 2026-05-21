@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS underlying_profile (
   updated_at    TEXT
 );
 
+CREATE TABLE IF NOT EXISTS underlying_business (
+  ucode             TEXT PRIMARY KEY,
+  uname             TEXT,
+  main_business     TEXT,
+  products_json     TEXT,
+  applications_json TEXT,
+  customers_json    TEXT,
+  position_evidence TEXT,
+  revenue_json      TEXT,
+  profile_hash      TEXT,
+  llm_model         TEXT,
+  updated_at        TEXT
+);
+
 CREATE TABLE IF NOT EXISTS strategy_picks (
   trade_date       TEXT,
   code             TEXT,

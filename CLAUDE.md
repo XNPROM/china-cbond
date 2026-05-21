@@ -96,6 +96,58 @@ python3 scripts/daily_refresh.py --trade-date 2026-04-24
 
 Runs the full 8-step pipeline in sequence: fetch_cb_universe → fetch_valuation → refresh_data → compute_volatility → assemble_dataset → bs_pricing → strategy_score → ensure_themes → build_overview_md → backtest_weekly → render_html → validate_snapshot. Each step writes to `etl_runs` table. Supports `--skip-fetch`, `--skip-valuation`, `--skip-vol`, `--skip-backtest` to skip API-dependent steps when re-running with existing data.
 
+## 主营业务 LLM 缓存 (underlying_business)
+
+`themes.business_rewrite` 由 LLM (claude-sonnet-4-6) 一次性抽取，缓存到 `underlying_business` 表（PK=ucode），日频流水线只读缓存。
+
+### 何时跑
+- **日频**：不用动。`generate_themes_direct.py` 自动读 `underlying_business`，无 LLM 调用。
+- **增量刷新（推荐季度）**：财报季后 / 简介更新后跑一次，按 `profile_hash` 自动跳过未变行。
+  ```bash
+  caffeinate -i python3 scripts/analyze_business_llm.py
+  ```
+- **新上市券**：universe 新增 ucode 时先补 profile，再跑 LLM 增量。
+  ```bash
+  # 1. 补 profile（替换 NEW_UCODE 为新正股代码）
+  python3 -c "
+  import sys; sys.path.insert(0,'scripts')
+  from _ifind import basic_data
+  from _db import connect, upsert as db_upsert
+  from datetime import datetime
+  UCODES = ['NEW_UCODE.SH']
+  FIELDS = [{'indicator':'ths_corp_profile','indiparams':['']},
+            {'indicator':'ths_industry','indiparams':['']},
+            {'indicator':'ths_stock_short_name_stock','indiparams':['']}]
+  r = basic_data(UCODES, FIELDS)
+  rows = []
+  for t in r.get('tables', []):
+      tbl = t.get('table', {})
+      rows.append({'ucode':t['thscode'],
+                   'uname':(tbl.get('ths_stock_short_name_stock') or [''])[0],
+                   'industry':(tbl.get('ths_industry') or [''])[0],
+                   'main_business':(tbl.get('ths_corp_profile') or [''])[0],
+                   'updated_at':datetime.now().isoformat()})
+  db_upsert(connect(), 'underlying_profile', rows, ['ucode'])
+  "
+  # 2. 跑 LLM 增量（自动只处理新增/变更的）
+  caffeinate -i python3 scripts/analyze_business_llm.py
+  ```
+- **强制全量重刷**：模型升级或 prompt 改动后用。
+  ```bash
+  caffeinate -i python3 scripts/analyze_business_llm.py --force
+  ```
+
+### 失败重试
+本轮失败的 ucode 会写入 `data/logs/business_llm_failed_<ts>.jsonl`，下轮：
+```bash
+python3 scripts/analyze_business_llm.py --retry-failed data/logs/business_llm_failed_<ts>.jsonl --force
+```
+
+### 关键约定
+- 必须用 `caffeinate -i` 防 Mac 待机，否则长时间挂起会造成大量 `claude exit=1`。
+- 走 Claude Code 订阅额度（无 ANTHROPIC_API_KEY）；模型固定 `claude-sonnet-4-6`，~7s/条、~$0.006/条。
+- 自动跳过未变更：以 profile 前 16 字符 SHA-256 作为 `profile_hash`，简介无变化则不重跑。
+
 ## Data Freshness Check
 
 iFinD bond-side fields (conv_prem_pct, pure_bond_value, maturity_call_price) can return NULL when data hasn't been processed yet (e.g., fetched too early after market close). Use `refresh_data.py` to detect and fix:
@@ -158,6 +210,7 @@ iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
 | `init_db.py` | Idempotent schema initializer |
 | `refresh_data.py` | Data freshness check + iFinD re-fetch for stale fields |
 | `_etl_log.py` | ETL run logging context manager (writes to `etl_runs` table) |
+| `analyze_business_llm.py` | LLM 抽取主营业务 → `underlying_business`，profile_hash 增量 |
 | `validate_data.py` | Data quality validation (universe size, field completeness, value ranges) |
 | `report_view_model.py` | Dashboard payload builder (normalizes parsed markdown → JSON view model for HTML) |
 | `daily_refresh.py` | One-command end-to-end refresh orchestrator (串行 ETL 入口, writes `etl_runs`) |
@@ -172,7 +225,8 @@ Archived scripts in `scripts/archive/`: `discover_universe.py`, `generate_themes
 | `universe` | `code` | Static bond metadata |
 | `valuation_daily` | `(trade_date, code)` | Daily price, premiums, rating, balance, 强赎/下修, PE, PB, BS定价, 相对价值, 希腊字母 |
 | `vol_daily` | `(trade_date, ucode)` | 20-day annualized vol per underlying stock |
-| `underlying_profile` | `ucode` | Company profile text |
+| `underlying_profile` | `ucode` | Company profile text (iFinD `ths_corp_profile` 原文) |
+| `underlying_business` | `ucode` | LLM 抽取的结构化主营业务（main_business / products / applications / customers / position_evidence + profile_hash） |
 | `strategy_picks` | `(trade_date, code, strategy)` | Strategy scores |
 | `themes` | `(trade_date, code)` | Theme tags + business rewrite + 申万行业 |
 | `etl_runs` | `run_id` | ETL step execution log (status, timing, row counts) |
