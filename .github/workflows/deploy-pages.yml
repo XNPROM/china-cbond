@@ -50,71 +50,90 @@ jobs:
       - name: Assemble _site
         run: |
           mkdir -p _site
-          DATES=()
           for dir in $(ls -d reports/????-??-??/ 2>/dev/null | sort -r); do
             date=$(basename "$dir")
             [ -f "$dir/cbond_overview.html" ] || continue
             mkdir -p "_site/$date"
             cp "$dir/cbond_overview.html" "_site/$date/index.html"
-            DATES+=("$date")
           done
 
-          # Keep /latest/ as a stable URL pointing to the most recent report.
-          if [ ${#DATES[@]} -gt 0 ]; then
-            mkdir -p _site/latest
-            cp "reports/${DATES[0]}/cbond_overview.html" _site/latest/index.html
-          fi
+      - name: Inject date dropdown + homepage redirect
+        run: |
+          python3 <<'PY'
+          import os, re, glob, html
 
-          # Homepage = date archive list.
-          {
-            cat <<'HTML_HEAD'
-          <!doctype html>
-          <html lang="zh-CN"><head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>可转债报告 · 历史归档</title>
-          <style>
-            :root { color-scheme: dark light; }
-            body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-                   max-width: 640px; margin: 48px auto; padding: 0 20px;
-                   background: #0f1419; color: #e6edf3; }
-            h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
-            .sub { color: #8b949e; font-size: 13px; margin-bottom: 28px; }
-            ul { list-style: none; padding: 0; margin: 0; }
-            li { margin: 0; }
-            a { display: flex; justify-content: space-between; align-items: center;
-                padding: 12px 14px; border-radius: 8px;
-                color: #58a6ff; text-decoration: none;
-                border: 1px solid transparent; }
-            a:hover { background: #161b22; border-color: #30363d; }
-            .badge { font-size: 11px; color: #0f1419; background: #3fb950;
-                     padding: 2px 8px; border-radius: 10px; font-weight: 600; }
-            @media (prefers-color-scheme: light) {
-              body { background: #fff; color: #1f2328; }
-              a { color: #0969da; }
-              a:hover { background: #f6f8fa; border-color: #d0d7de; }
-              .badge { color: #fff; background: #1a7f37; }
-            }
-          </style>
-          </head><body>
-          <h1>可转债报告 · 历史归档</h1>
-          <div class="sub">点击日期查看当日全景。<a href="latest/" style="display:inline;padding:0;">→ 直达最新</a></div>
-          <ul>
-          HTML_HEAD
-            first=1
-            for d in "${DATES[@]}"; do
-              if [ $first -eq 1 ]; then
-                echo "<li><a href=\"$d/\"><span>$d</span><span class=\"badge\">最新</span></a></li>"
-                first=0
-              else
-                echo "<li><a href=\"$d/\"><span>$d</span></a></li>"
-              fi
-            done
-            cat <<'HTML_TAIL'
-          </ul>
-          </body></html>
-          HTML_TAIL
-          } > _site/index.html
+          dates = sorted(
+              [os.path.basename(os.path.dirname(p)) for p in glob.glob("_site/*/index.html")],
+              reverse=True,
+          )
+          if not dates:
+              print("no reports rendered, nothing to inject")
+              raise SystemExit(0)
+
+          latest = dates[0]
+
+          # /latest/ stable URL = copy of newest report
+          os.makedirs("_site/latest", exist_ok=True)
+          with open(f"_site/{latest}/index.html", "rb") as f:
+              latest_html = f.read()
+          with open("_site/latest/index.html", "wb") as f:
+              f.write(latest_html)
+
+          # Homepage = redirect to /latest/
+          with open("_site/index.html", "w", encoding="utf-8") as f:
+              f.write(
+                  '<!doctype html><meta charset="utf-8">'
+                  '<meta http-equiv="refresh" content="0;url=latest/">'
+                  '<title>可转债报告</title>'
+                  '<a href="latest/">前往最新一期</a>'
+              )
+
+          # Inject dropdown into every /<date>/index.html (and /latest/index.html).
+          # The current hero-date line is:
+          #   <p class="hero-date">数据截至 YYYY-MM-DD</p>
+          targets = [f"_site/{d}/index.html" for d in dates] + ["_site/latest/index.html"]
+          pat = re.compile(
+              r'<p class="hero-date">数据截至\s*([0-9]{4}-[0-9]{2}-[0-9]{2})</p>'
+          )
+
+          def build_select(current):
+              # current may be the literal date or "latest"
+              opts = []
+              for d in dates:
+                  label = f"{d}（最新）" if d == latest else d
+                  selected = " selected" if d == current or (current == "latest" and d == latest) else ""
+                  opts.append(
+                      f'<option value="{d}"{selected}>{html.escape(label)}</option>'
+                  )
+              # On change: navigate sibling directory. Both /latest/ and /<date>/
+              # are one level deep, so "../<picked>/" works in both cases.
+              return (
+                  '<p class="hero-date">数据截至 '
+                  '<select onchange="if(this.value)location.href=\'../\'+this.value+\'/\';" '
+                  'style="background:rgba(255,255,255,0.06);color:inherit;'
+                  'border:1px solid rgba(255,255,255,0.2);border-radius:6px;'
+                  'padding:2px 10px;font:inherit;cursor:pointer;margin-left:4px;">'
+                  + "".join(opts)
+                  + '</select></p>'
+              )
+
+          for path in targets:
+              if not os.path.exists(path):
+                  continue
+              with open(path, "r", encoding="utf-8") as f:
+                  src = f.read()
+              # Figure out which date this page corresponds to
+              parent = os.path.basename(os.path.dirname(path))
+              current = parent  # either "latest" or YYYY-MM-DD
+              replacement = build_select(current)
+              new_src, n = pat.subn(replacement, src, count=1)
+              if n == 0:
+                  print(f"[warn] hero-date pattern not found in {path}")
+                  continue
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(new_src)
+              print(f"[inject] {path} ({len(dates)} dates)")
+          PY
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
