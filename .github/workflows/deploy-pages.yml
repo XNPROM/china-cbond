@@ -50,15 +50,71 @@ jobs:
       - name: Assemble _site
         run: |
           mkdir -p _site
-          for dir in reports/????-??-??/; do
+          DATES=()
+          for dir in $(ls -d reports/????-??-??/ 2>/dev/null | sort -r); do
             date=$(basename "$dir")
+            [ -f "$dir/cbond_overview.html" ] || continue
             mkdir -p "_site/$date"
-            [ -f "$dir/cbond_overview.html" ] && cp "$dir/cbond_overview.html" "_site/$date/index.html"
+            cp "$dir/cbond_overview.html" "_site/$date/index.html"
+            DATES+=("$date")
           done
-          LATEST=$(ls -d reports/????-??-??/ 2>/dev/null | sort | tail -1)
-          if [ -n "$LATEST" ] && [ -f "${LATEST}cbond_overview.html" ]; then
-            cp "${LATEST}cbond_overview.html" _site/index.html
+
+          # Keep /latest/ as a stable URL pointing to the most recent report.
+          if [ ${#DATES[@]} -gt 0 ]; then
+            mkdir -p _site/latest
+            cp "reports/${DATES[0]}/cbond_overview.html" _site/latest/index.html
           fi
+
+          # Homepage = date archive list.
+          {
+            cat <<'HTML_HEAD'
+          <!doctype html>
+          <html lang="zh-CN"><head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>可转债报告 · 历史归档</title>
+          <style>
+            :root { color-scheme: dark light; }
+            body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+                   max-width: 640px; margin: 48px auto; padding: 0 20px;
+                   background: #0f1419; color: #e6edf3; }
+            h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+            .sub { color: #8b949e; font-size: 13px; margin-bottom: 28px; }
+            ul { list-style: none; padding: 0; margin: 0; }
+            li { margin: 0; }
+            a { display: flex; justify-content: space-between; align-items: center;
+                padding: 12px 14px; border-radius: 8px;
+                color: #58a6ff; text-decoration: none;
+                border: 1px solid transparent; }
+            a:hover { background: #161b22; border-color: #30363d; }
+            .badge { font-size: 11px; color: #0f1419; background: #3fb950;
+                     padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+            @media (prefers-color-scheme: light) {
+              body { background: #fff; color: #1f2328; }
+              a { color: #0969da; }
+              a:hover { background: #f6f8fa; border-color: #d0d7de; }
+              .badge { color: #fff; background: #1a7f37; }
+            }
+          </style>
+          </head><body>
+          <h1>可转债报告 · 历史归档</h1>
+          <div class="sub">点击日期查看当日全景。<a href="latest/" style="display:inline;padding:0;">→ 直达最新</a></div>
+          <ul>
+          HTML_HEAD
+            first=1
+            for d in "${DATES[@]}"; do
+              if [ $first -eq 1 ]; then
+                echo "<li><a href=\"$d/\"><span>$d</span><span class=\"badge\">最新</span></a></li>"
+                first=0
+              else
+                echo "<li><a href=\"$d/\"><span>$d</span></a></li>"
+              fi
+            done
+            cat <<'HTML_TAIL'
+          </ul>
+          </body></html>
+          HTML_TAIL
+          } > _site/index.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
