@@ -6,7 +6,7 @@
 #   so the GitHub Pages workflow (deploy-pages.yml on developer-1) can rebuild.
 set -u
 
-REPO_ROOT="/Users/apple/Desktop/转债"
+REPO_ROOT="/Users/apple/cbond_monitor"
 cd "$REPO_ROOT" || { echo "[fatal] cannot cd $REPO_ROOT"; exit 1; }
 
 # Ensure PATH covers git / ssh under launchd's minimal environment.

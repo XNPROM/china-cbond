@@ -30,8 +30,8 @@ TODO_*.md
 sample_*.md
 cbond_overview_*.md
 cbond_overview_*.html
-# reports/ — md is source (committed), html is CI output (not tracked)
-reports/*/cbond_overview.html
+# reports/ — md is source; html is pre-rendered locally with backtest chart and shipped to CI
+# (do NOT ignore reports/*/cbond_overview.html — CI uses the committed HTML as-is)
 reports/*/cbond_strategy.html
 reports/*/cbond_strategy.md
 reports/index.html
