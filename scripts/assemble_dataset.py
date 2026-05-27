@@ -105,6 +105,23 @@ def main():
     filtered = before - len(items)
     if filtered:
         print(f"[filter] excluded {filtered} force-redeemed bonds")
+
+    # Sanity guard: pure_bond_value should never exceed 1.3× maturity redemption price.
+    # iFinD occasionally returns inflated pbv for irregular bonds (e.g. 星球转债 2026-05-27
+    # returned pbv=204 with redemp=114). When that happens, null both pbv and the
+    # derived pure_prem so downstream consumers don't render misleading values.
+    sanity_fixed = 0
+    for it in items:
+        pbv = it.get("pure_bond_value")
+        cap = it.get("maturity_call_price") or 110.0
+        if pbv is not None and pbv > cap * 1.3:
+            print(f"[sanity] {it.get('code')} {it.get('name')}: pbv={pbv:.2f} > 1.3×redemp({cap}); nulling pbv/pure_prem")
+            it["pure_bond_value"] = None
+            it["pure_prem"] = None
+            sanity_fixed += 1
+    if sanity_fixed:
+        print(f"[sanity] nulled {sanity_fixed} bonds with bogus pure_bond_value")
+
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(
         {"trade_date": args.trade_date, "count": len(items), "items": items},
