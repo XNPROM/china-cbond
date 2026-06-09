@@ -59,8 +59,17 @@ if ! git commit -m "data: refresh ${DATE}" >> "$LOG" 2>&1; then
 fi
 
 if ! git push origin HEAD:main >> "$LOG" 2>&1; then
-  echo "[fail] git push failed" >> "$LOG"
+  echo "[fail] git push origin failed" >> "$LOG"
   exit 1
 fi
-
 echo "[ok] pushed ${DATE} to origin/main" >> "$LOG"
+
+# Mirror to xnprom (non-fatal if it fails — origin already has the canonical copy).
+if git remote get-url xnprom >/dev/null 2>&1; then
+  if git push xnprom HEAD:main >> "$LOG" 2>&1 \
+     && git push xnprom HEAD:developer-1 >> "$LOG" 2>&1; then
+    echo "[ok] mirrored ${DATE} to xnprom (main + developer-1)" >> "$LOG"
+  else
+    echo "[warn] xnprom mirror failed (non-fatal); origin push was successful" >> "$LOG"
+  fi
+fi
