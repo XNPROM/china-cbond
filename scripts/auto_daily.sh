@@ -31,9 +31,47 @@ if [ "$DOW" = "6" ] || [ "$DOW" = "7" ]; then
   exit 0
 fi
 
-# Run the 8-step pipeline.
-if ! /usr/local/bin/python3.12 scripts/daily_refresh.py --trade-date "$DATE" >> "$LOG" 2>&1; then
-  echo "[fail] daily_refresh exited non-zero" >> "$LOG"
+# Run the pipeline with whole-run retry. The iFinD HTTP API is intermittently
+# flaky: batch calls time out for minutes at a stretch, leaving bond-side fields
+# NULL and tripping strict validation. The inner 3-retry/3.5s backoff in
+# _ifind._post cannot ride out a multi-minute outage, so we retry the entire
+# pipeline here, with a salvage pass in between.
+PY=/usr/local/bin/python3.12
+ATTEMPTS="${AUTO_DAILY_ATTEMPTS:-3}"
+WAIT_SECONDS="${AUTO_DAILY_WAIT:-300}"
+success=0
+
+for attempt in $(seq 1 "$ATTEMPTS"); do
+  echo "[attempt $attempt/$ATTEMPTS] daily_refresh for $DATE" >> "$LOG"
+
+  # Primary path: full pipeline, strict validation (highest quality bar).
+  if "$PY" scripts/daily_refresh.py --trade-date "$DATE" >> "$LOG" 2>&1; then
+    success=1
+    break
+  fi
+  echo "[warn] attempt $attempt: daily_refresh failed" >> "$LOG"
+
+  # Salvage path: force re-fetch stale iFinD bond fields, then rebuild downstream
+  # only (no re-fetch), tolerating residual warnings (e.g. partial stock PE/MV).
+  echo "[recover] refresh_data --fix --force + downstream rebuild" >> "$LOG"
+  "$PY" scripts/refresh_data.py --trade-date "$DATE" --fix --force >> "$LOG" 2>&1 || true
+  if "$PY" scripts/daily_refresh.py --trade-date "$DATE" \
+        --skip-fetch --skip-valuation --skip-vol \
+        --allow-validate-warnings >> "$LOG" 2>&1; then
+    echo "[ok] recovered $DATE via salvage pass" >> "$LOG"
+    success=1
+    break
+  fi
+  echo "[warn] attempt $attempt: salvage pass also failed" >> "$LOG"
+
+  if [ "$attempt" -lt "$ATTEMPTS" ]; then
+    echo "[wait] sleeping ${WAIT_SECONDS}s before retry (iFinD may be transiently down)" >> "$LOG"
+    sleep "$WAIT_SECONDS"
+  fi
+done
+
+if [ "$success" -ne 1 ]; then
+  echo "[fail] daily_refresh failed after $ATTEMPTS attempts" >> "$LOG"
   exit 1
 fi
 
