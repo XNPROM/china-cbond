@@ -18,6 +18,17 @@ LOG_DIR="$REPO_ROOT/data/logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/auto_${DATE}.log"
 
+# Skip if today's report already exists with real data (prevents duplicate runs on wake/boot)
+# HTML must be > 500KB to count as a valid report; smaller files = failed runs that need retry
+if [ -z "${1:-}" ] && [ -f "reports/${DATE}/cbond_overview.html" ]; then
+  SIZE=$(stat -f%z "reports/${DATE}/cbond_overview.html" 2>/dev/null || echo 0)
+  if [ "$SIZE" -gt 524288 ]; then
+    echo "[skip] $(date -Iseconds) auto_daily for $DATE — report already exists (${SIZE} bytes)" >> "$LOG"
+    exit 0
+  fi
+  echo "[retry] $(date -Iseconds) auto_daily for $DATE — previous report too small (${SIZE} bytes), re-running" >> "$LOG"
+fi
+
 {
   echo "=========================================="
   echo "[start] $(date -Iseconds) auto_daily for $DATE"
