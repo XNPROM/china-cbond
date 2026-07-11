@@ -118,6 +118,16 @@ python scripts/fetch_underlying_profile.py \
 
 其余时间直接复用最近一次成功结果。接口失败时保留旧值，不以空数据覆盖。运行日志会输出 `reuse`、`missing`、`expired`、`refreshed` 和 `failed` 数量。
 
+当 iFinD `p05479` 数据池额度耗尽、但已有当日 universe 文件时，可用历史行情恢复被数据池或本地筛选遗漏的券：
+
+```bash
+python scripts/fetch_cb_universe.py --date YYYY-MM-DD \
+  --out-json data/raw/asof=YYYY-MM-DD/cbond_universe.json \
+  --out-csv data/raw/asof=YYYY-MM-DD/cbond_universe.csv \
+  --out-codes data/raw/asof=YYYY-MM-DD/cbond_codes.txt \
+  --recover-existing
+```
+
 ---
 
 ## 每日刷新流程

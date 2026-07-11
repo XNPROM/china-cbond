@@ -25,7 +25,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, init_schema, upsert as db_upsert
-from _ifind import ths_dr
+from _ifind import history, ths_dr
 
 
 FIELDS = (
@@ -36,6 +36,9 @@ FIELDS = (
         35, 36, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55
     ])
 )
+
+VALID_CB_RE = re.compile(r"^(11[0138]\d{3}\.(SH|SZ)|12[378]\d{3}\.(SH|SZ))$")
+PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
 
 
 def _safe(arr, idx, default=""):
@@ -50,6 +53,75 @@ def _date_norm(s):
     if not s:
         return ""
     return s.replace("/", "").replace("-", "")
+
+
+def _recovery_candidates(rows, existing_codes, date_ymd):
+    candidates = []
+    for code, name, ucode, uname, listed, maturity in rows:
+        if not VALID_CB_RE.match(code or ""):
+            continue
+        if PRIVATE_CB_RE.search(name or ""):
+            continue
+        if code in existing_codes or not listed or listed > date_ymd:
+            continue
+        if maturity and maturity < date_ymd:
+            continue
+        candidates.append({
+            "code": code,
+            "name": name or "",
+            "ucode": ucode or "",
+            "uname": uname or "",
+            "conv_price": "",
+            "issue_date": "",
+            "maturity": maturity or "",
+            "listed": listed or "",
+            "face_value": "",
+            "coupon": "",
+            "rating_issuer": "",
+            "rating_bond": "",
+            "sw_l1": "",
+            "sw_l2": "",
+            "sw_l3": "",
+            "guarantee": "",
+            "prospectus": "",
+        })
+    return candidates
+
+
+def _recover_trading_bonds(bonds, date_ymd):
+    """Recover p05479 omissions only when the bond has a close on target date."""
+    con = connect()
+    rows = con.execute(
+        "SELECT code, name, ucode, uname, list_date, maturity_date FROM universe"
+    ).fetchall()
+    con.close()
+
+    existing_codes = {b["code"] for b in bonds}
+    candidates = _recovery_candidates(rows, existing_codes, date_ymd)
+    if not candidates:
+        return bonds
+
+    by_code = {b["code"]: b for b in candidates}
+    recovered = []
+    for batch in (candidates[i:i + 80] for i in range(0, len(candidates), 80)):
+        codes = [b["code"] for b in batch]
+        response = history(codes, "close", date_ymd, date_ymd)
+        if response.get("errorcode") != 0:
+            raise RuntimeError(f"iFinD universe recovery failed: {response.get('errmsg', 'unknown')}")
+        for table in response.get("tables", []):
+            close = (table.get("table", {}).get("close") or [None])[0]
+            code = table.get("thscode")
+            if code in by_code and close is not None:
+                recovered.append(by_code[code])
+
+    if recovered:
+        print(
+            f"[recover] restored {len(recovered)} p05479 omissions with target-date close: "
+            + ", ".join(f"{b['code']} {b['name']}" for b in recovered)
+        )
+        bonds.extend(recovered)
+        bonds.sort(key=lambda b: b["code"])
+    return bonds
 
 
 def fetch_universe(date_ymd):
@@ -90,24 +162,22 @@ def fetch_universe(date_ymd):
         })
 
     # Keep only main-board exchange bonds with continuous auction pricing.
-    # Valid prefixes: SH 110/113/118, SZ 123/127/128.
+    # Valid prefixes: SH 110/111/113/118, SZ 123/127/128.
     # Excludes: 810xxx (北交所/新三板定转), 145xxx (非标定向转债), etc.
-    _VALID = re.compile(r'^(11[038]\d{3}\.(SH|SZ)|12[378]\d{3}\.(SH|SZ))$')
     before = len(bonds)
-    bonds = [b for b in bonds if _VALID.match(b.get("code", ""))]
+    bonds = [b for b in bonds if VALID_CB_RE.match(b.get("code", ""))]
     excluded = before - len(bonds)
     if excluded:
         print(f"[filter] excluded {excluded} non-exchange bonds (北交所/新三板/定向)")
 
     # Exclude 定向转债 that share code prefix with public bonds but are privately placed.
     # Name patterns include 定转, 定01, 定02, etc.
-    _DING = re.compile(r'(定转|定\d+)')
     before = len(bonds)
-    bonds = [b for b in bonds if not _DING.search(b.get("name", ""))]
+    bonds = [b for b in bonds if not PRIVATE_CB_RE.search(b.get("name", ""))]
     excluded = before - len(bonds)
     if excluded:
         print(f"[filter] excluded {excluded} 定向转债 by name pattern")
-    return bonds
+    return _recover_trading_bonds(bonds, date_ymd)
 
 
 def save_to_db(bonds, date_ymd):
@@ -152,10 +222,28 @@ def main():
     ap.add_argument("--out-csv",   default="", help="output CSV path")
     ap.add_argument("--out-codes", default="", help="output codes.txt path")
     ap.add_argument("--skip-db",   action="store_true")
+    ap.add_argument(
+        "--recover-existing",
+        action="store_true",
+        help="Reuse --out-json and recover omitted bonds by target-date close without calling p05479",
+    )
     args = ap.parse_args()
 
     date_ymd = args.date.replace("-", "")
-    bonds = fetch_universe(date_ymd)
+    if args.recover_existing:
+        if not args.out_json or not os.path.exists(args.out_json):
+            raise RuntimeError("--recover-existing requires an existing --out-json file")
+        with open(args.out_json, encoding="utf-8") as f:
+            bonds = json.load(f).get("items", [])
+        bonds = [
+            b for b in bonds
+            if VALID_CB_RE.match(b.get("code", ""))
+            and not PRIVATE_CB_RE.search(b.get("name", ""))
+        ]
+        bonds = _recover_trading_bonds(bonds, date_ymd)
+        print(f"[recover] reused existing universe with {len(bonds)} bonds")
+    else:
+        bonds = fetch_universe(date_ymd)
 
     asof = f"{date_ymd[:4]}-{date_ymd[4:6]}-{date_ymd[6:]}"
     base_dir = f"data/raw/asof={asof}"
