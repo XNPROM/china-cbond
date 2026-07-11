@@ -39,6 +39,10 @@ def _classify_sector(delta):
     return "偏债"
 
 
+def _format_delta(delta):
+    return f"{delta:.2f}" if delta is not None else "N/A"
+
+
 def _rank_and_score(candidates):
     by_conv = sorted(candidates, key=lambda r: r["conv_prem"])
     by_price = sorted(candidates, key=lambda r: r["latest"])
@@ -120,7 +124,7 @@ def main():
         n_sector = len(group)
         for i, row in enumerate(top_s):
             row["strategy"] = f"双低-{sector_name}"
-            row["note"] = f"{sector_name}({n_sector}只) Delta={row.get('bs_delta', ''):.2f}，转股溢价率{row['conv_prem']:.1f}%，价格{row['latest']:.1f}"
+            row["note"] = f"{sector_name}({n_sector}只) Delta={_format_delta(row.get('bs_delta'))}，转股溢价率{row['conv_prem']:.1f}%，价格{row['latest']:.1f}"
             sector_picks.append(row)
         print(f"[sector] {sector_name}: {n_sector} candidates, top {len(top_s)}")
 

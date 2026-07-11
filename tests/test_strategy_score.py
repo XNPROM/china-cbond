@@ -14,7 +14,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from strategy_score import _percentile, _classify_sector, _rank_and_score
+from strategy_score import _format_delta, _percentile, _classify_sector, _rank_and_score
 
 
 class PercentileTests(unittest.TestCase):
@@ -76,6 +76,10 @@ class SectorClassificationTests(unittest.TestCase):
     def test_none_delta(self):
         """None delta should default to 偏债"""
         self.assertEqual(_classify_sector(None), "偏债")
+
+    def test_none_delta_note_format(self):
+        self.assertEqual(_format_delta(None), "N/A")
+        self.assertEqual(_format_delta(0.456), "0.46")
 
 
 class RankAndScoreTests(unittest.TestCase):
