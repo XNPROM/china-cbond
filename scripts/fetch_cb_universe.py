@@ -180,39 +180,80 @@ def fetch_universe(date_ymd):
     return _recover_trading_bonds(bonds, date_ymd)
 
 
+def _delete_universe_orphans(con, active_codes):
+    """Delete universe rows absent from the authoritative current snapshot."""
+    codes = sorted(set(active_codes))
+    if not codes:
+        raise ValueError("refusing to clean universe with an empty active code set")
+
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE active_universe_codes "
+        "(code TEXT PRIMARY KEY)"
+    )
+    con.executemany(
+        "INSERT INTO active_universe_codes VALUES (?)",
+        [(code,) for code in codes],
+    )
+    orphan_codes = [row[0] for row in con.execute(
+        "SELECT u.code FROM universe u "
+        "WHERE NOT EXISTS ("
+        "SELECT 1 FROM active_universe_codes a WHERE a.code = u.code"
+        ") ORDER BY u.code"
+    ).fetchall()]
+    con.execute(
+        "DELETE FROM universe u WHERE NOT EXISTS ("
+        "SELECT 1 FROM active_universe_codes a WHERE a.code = u.code"
+        ")"
+    )
+    return orphan_codes
+
+
 def save_to_db(bonds, date_ymd):
     con = connect()
     init_schema(con)
 
-    now = datetime.utcnow().isoformat()
-    universe_rows = [{
-        "code":          b["code"],
-        "name":          b["name"],
-        "ucode":         b["ucode"],
-        "uname":         b["uname"],
-        "list_date":     _date_norm(b["listed"]),
-        "maturity_date": _date_norm(b["maturity"]),
-        "updated_at":    now,
-    } for b in bonds]
-    n_u = db_upsert(con, "universe", universe_rows, ["code"])
-    print(f"[db] universe upserted {n_u} rows")
+    try:
+        con.execute("BEGIN")
+        now = datetime.utcnow().isoformat()
+        universe_rows = [{
+            "code":          b["code"],
+            "name":          b["name"],
+            "ucode":         b["ucode"],
+            "uname":         b["uname"],
+            "list_date":     _date_norm(b["listed"]),
+            "maturity_date": _date_norm(b["maturity"]),
+            "updated_at":    now,
+        } for b in bonds]
+        n_u = db_upsert(con, "universe", universe_rows, ["code"])
+        print(f"[db] universe upserted {n_u} rows")
 
-    # themes table: 申万行业作为一级主题兜底，正式题材仍由 generate_themes_* 覆写
-    theme_rows = [{
-        "trade_date": f"{date_ymd[:4]}-{date_ymd[4:6]}-{date_ymd[6:]}",
-        "code":       b["code"],
-        "theme_l1":   b["sw_l2"] or b["sw_l1"] or "其他综合",
-        "all_themes_json": json.dumps(
-            [t for t in [b["sw_l1"], b["sw_l2"], b["sw_l3"]] if t],
-            ensure_ascii=False
-        ),
-        "business_rewrite": "",
-        "industry": b["sw_l1"] or "",
-    } for b in bonds]
-    n_t = db_upsert(con, "themes", theme_rows, ["trade_date", "code"])
-    print(f"[db] themes(申万兜底) upserted {n_t} rows")
+        orphan_codes = _delete_universe_orphans(
+            con, (b["code"] for b in bonds)
+        )
+        print(f"[db] universe deleted {len(orphan_codes)} orphan rows")
+        if orphan_codes:
+            print("[db] deleted orphan codes: " + ", ".join(orphan_codes))
 
-    con.close()
+        # themes table: 申万行业作为一级主题兜底，正式题材仍由 generate_themes_* 覆写
+        theme_rows = [{
+            "trade_date": f"{date_ymd[:4]}-{date_ymd[4:6]}-{date_ymd[6:]}",
+            "code":       b["code"],
+            "theme_l1":   b["sw_l2"] or b["sw_l1"] or "其他综合",
+            "all_themes_json": json.dumps(
+                [t for t in [b["sw_l1"], b["sw_l2"], b["sw_l3"]] if t],
+                ensure_ascii=False
+            ),
+            "business_rewrite": "",
+            "industry": b["sw_l1"] or "",
+        } for b in bonds]
+        n_t = db_upsert(con, "themes", theme_rows, ["trade_date", "code"])
+        print(f"[db] themes(申万兜底) upserted {n_t} rows")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.close()
 
 
 def main():

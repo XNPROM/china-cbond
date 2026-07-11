@@ -4,7 +4,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from fetch_cb_universe import _recovery_candidates
+import duckdb
+import pytest
+
+from fetch_cb_universe import _delete_universe_orphans, _recovery_candidates
 
 
 def test_recovery_candidates_only_include_date_eligible_omissions():
@@ -19,3 +22,30 @@ def test_recovery_candidates_only_include_date_eligible_omissions():
     result = _recovery_candidates(rows, {"110073.SH"}, "20260710")
 
     assert [row["code"] for row in result] == ["111012.SH"]
+
+
+def test_delete_universe_orphans_keeps_exact_active_snapshot():
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE universe (code TEXT PRIMARY KEY)")
+    con.executemany(
+        "INSERT INTO universe VALUES (?)",
+        [("111012.SH",), ("113575.SH",), ("110815.SH",)],
+    )
+
+    deleted = _delete_universe_orphans(
+        con, ["111012.SH", "113575.SH", "113575.SH"]
+    )
+
+    assert deleted == ["110815.SH"]
+    assert con.execute("SELECT code FROM universe ORDER BY code").fetchall() == [
+        ("111012.SH",),
+        ("113575.SH",),
+    ]
+
+
+def test_delete_universe_orphans_rejects_empty_snapshot():
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE universe (code TEXT PRIMARY KEY)")
+
+    with pytest.raises(ValueError, match="empty active code set"):
+        _delete_universe_orphans(con, [])
