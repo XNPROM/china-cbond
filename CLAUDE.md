@@ -100,9 +100,11 @@ Runs the full 8-step pipeline in sequence: fetch_cb_universe → fetch_valuation
 
 `themes.business_rewrite` 由 LLM (claude-sonnet-4-6) 一次性抽取，缓存到 `underlying_business` 表（PK=ucode），日频流水线只读缓存。
 
+原始主营业务保存在 `underlying_profile`。日频流水线每次检查、每 30 天刷新一次；新股、缺失行和空文本立即补充，其他时间复用最近一次成功结果。抓取失败时必须保留旧值。
+
 ### 何时跑
 - **日频**：不用动。`generate_themes_direct.py` 自动读 `underlying_business`，无 LLM 调用。
-- **增量刷新（推荐季度）**：财报季后 / 简介更新后跑一次，按 `profile_hash` 自动跳过未变行。
+- **结构化增量刷新（原文月度刷新后）**：按 `profile_hash` 自动跳过未变行。
   ```bash
   caffeinate -i python3 scripts/analyze_business_llm.py
   ```

@@ -1,9 +1,12 @@
 """Thin wrapper around iFinD HTTP quant endpoints.
 
-Uses curl subprocess instead of urllib to work around LibreSSL 2.8.3 TLS
-incompatibility with quantapi.51ifind.com.
+Uses Python requests with environment proxies disabled. The macOS system curl
+currently fails the iFinD TLS handshake through both proxy and direct paths.
 """
-import json, subprocess, time
+import time
+
+import requests
+
 from _auth import get_access_token
 
 BASE = "https://quantapi.51ifind.com/api/v1"
@@ -12,27 +15,25 @@ BASE = "https://quantapi.51ifind.com/api/v1"
 def _post(path, body, retries=3, timeout=60):
     url = f"{BASE}/{path}"
     token = get_access_token()
-    payload = json.dumps(body)
     last_err = None
     for i in range(retries):
         try:
-            result = subprocess.run(
-                [
-                    "curl", "-s", "-X", "POST", url,
-                    "-H", "Content-Type: application/json",
-                    "-H", f"access_token: {token}",
-                    "--data", payload,
-                    "--max-time", str(timeout),
-                ],
-                capture_output=True, text=True, timeout=timeout + 5,
+            session = requests.Session()
+            session.trust_env = False
+            response = session.post(
+                url,
+                headers={"Content-Type": "application/json", "access_token": token},
+                json=body,
+                timeout=timeout,
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"curl error: {result.stderr.strip()}")
-            return json.loads(result.stdout)
-        except Exception as e:
+            response.raise_for_status()
+            return response.json()
+        except (requests.RequestException, ValueError) as e:
             last_err = e
-            time.sleep(0.5 * (2 ** i))
-    raise last_err
+            if i < retries - 1:
+                time.sleep(0.5 * (2 ** i))
+    detail = getattr(getattr(last_err, "response", None), "text", "")[:300]
+    raise RuntimeError(f"iFinD request failed after {retries} attempts: {last_err}; response={detail}") from last_err
 
 
 def basic_data(codes, indipara):

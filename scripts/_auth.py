@@ -3,7 +3,12 @@
 Reads the cached access token written by the ifind-http-data-fetch skill.
 Falls back to fetching fresh via refresh_token if cache is missing/stale.
 """
-import json, os, time, subprocess, hashlib
+import hashlib
+import json
+import os
+import time
+
+import requests
 
 CACHE_CANDIDATES = [
     "/Users/apple/Desktop/投资计划/.codex_logs/ifind_access_token_cache.json",
@@ -31,17 +36,22 @@ def _fetch_fresh():
     if not os.path.exists(REFRESH_TOKEN_FILE):
         raise RuntimeError(f"refresh_token file not found: {REFRESH_TOKEN_FILE}")
     rt = open(REFRESH_TOKEN_FILE).read().strip()
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST", AUTH_URL,
-         "-H", "Content-Type: application/json",
-         "-H", f"refresh_token: {rt}",
-         "--data", "{}",
-         "--max-time", "30"],
-        capture_output=True, text=True, timeout=35,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"curl auth error: {result.stderr.strip()}")
-    resp = json.loads(result.stdout)
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.post(
+            AUTH_URL,
+            headers={"Content-Type": "application/json", "refresh_token": rt},
+            json={},
+            timeout=30,
+        )
+        response.raise_for_status()
+        resp = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        detail = getattr(getattr(exc, "response", None), "text", "")[:300]
+        raise RuntimeError(f"iFinD auth request failed: {exc}; response={detail}") from exc
+    if not ((resp.get("data") or {}).get("access_token")):
+        raise RuntimeError(f"iFinD auth rejected refresh token: {resp}")
     tok = resp["data"]["access_token"]
     # write cache
     cache_path = CACHE_CANDIDATES[0]

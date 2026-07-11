@@ -108,11 +108,21 @@ python scripts/fetch_underlying_profile.py \
 | `~/.codex_logs/ifind_refresh_token.txt` | Refresh Token（有效期 1 年） |
 | `~/.codex_logs/ifind_access_token_cache.json` | Access Token 缓存（自动刷新，有效期 6 小时） |
 
+### 主营业务缓存
+
+`underlying_profile` 保存正股公司简介和主营业务原文。每日流水线都会检查缓存，但只在以下情况调用 iFinD：
+
+- 距该正股上次成功更新已满 30 天；
+- 新上市正股尚无缓存；
+- 现有缓存的主营业务为空。
+
+其余时间直接复用最近一次成功结果。接口失败时保留旧值，不以空数据覆盖。运行日志会输出 `reuse`、`missing`、`expired`、`refreshed` 和 `failed` 数量。
+
 ---
 
 ## 每日刷新流程
 
-8 步管线，每日运行一次（交易日），总耗时约 5-8 分钟：
+每日管线在行情步骤前检查主营业务月度缓存，然后运行 8 个日频步骤，总耗时约 5-8 分钟：
 
 ```bash
 ASOF=2026-04-24

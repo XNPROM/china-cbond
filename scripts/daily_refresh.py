@@ -148,6 +148,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trade-date", required=True, help="YYYY-MM-DD")
     ap.add_argument("--skip-fetch", action="store_true", help="Skip cbond universe fetch")
+    ap.add_argument("--skip-profile", action="store_true", help="Skip monthly underlying profile refresh")
     ap.add_argument("--skip-valuation", action="store_true", help="Skip valuation fetch and refresh")
     ap.add_argument("--skip-vol", action="store_true", help="Skip volatility fetch")
     ap.add_argument("--skip-backtest", action="store_true", help="Skip backtest computation")
@@ -190,6 +191,15 @@ def main():
         ], cwd)
         codes = _latest_codes_file(cwd, trade_date)
         universe = _latest_universe_file(cwd, trade_date)
+
+    if not args.skip_profile:
+        _run_step(trade_date, "refresh_underlying_profile", [
+            PY, "scripts/fetch_underlying_profile.py",
+            "--universe", universe,
+            "--out", os.path.join(raw_dir, "underlying_profile.json"),
+            "--asof", trade_date,
+            "--max-age-days", "30",
+        ], cwd)
 
     if not args.skip_valuation:
         _run_step(trade_date, "fetch_valuation", [

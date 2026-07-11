@@ -13,7 +13,7 @@ Usage:
 """
 import argparse, json, os, ssl, sys, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _ifind import basic_data, batched
@@ -24,6 +24,31 @@ STOCK_FIELDS = [
     {"indicator": "ths_corp_profile", "indiparams": [""]},
     {"indicator": "ths_industry", "indiparams": [""]},  # 行业 (may return empty; supplementary)
 ]
+
+
+def _parse_updated_at(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def select_refresh_codes(ucodes, existing, asof, max_age_days):
+    """Return missing or expired profile codes and counts for logging."""
+    cutoff = datetime.strptime(asof, "%Y-%m-%d") - timedelta(days=max_age_days)
+    missing = []
+    expired = []
+    for code in ucodes:
+        row = existing.get(code)
+        updated_at = _parse_updated_at(row.get("updated_at")) if row else None
+        business = (row.get("main_business") or row.get("profile") or "") if row else ""
+        if not business.strip():
+            missing.append(code)
+        elif updated_at is None or updated_at < cutoff:
+            expired.append(code)
+    return missing + expired, len(missing), len(expired)
 
 
 def _to_secid(code: str) -> str:
@@ -59,6 +84,8 @@ def main():
     ap.add_argument("--universe", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--batch-size", type=int, default=30)
+    ap.add_argument("--asof", default=datetime.now().strftime("%Y-%m-%d"))
+    ap.add_argument("--max-age-days", type=int, default=30)
     args = ap.parse_args()
 
     uni = json.load(open(args.universe))
@@ -66,21 +93,53 @@ def main():
     ucodes = sorted({r["ucode"] for r in items if r.get("ucode")})
     print(f"[stocks] {len(ucodes)} unique underlying codes")
 
-    profiles = {}
-    for b in batched(ucodes, args.batch_size):
+    con = connect()
+    init_schema(con)
+    existing_rows = con.execute(
+        "SELECT ucode, uname, industry, main_business, updated_at FROM underlying_profile"
+    ).fetchall()
+    existing = {
+        row[0]: {
+            "uname": row[1] or "",
+            "industry": row[2] or "",
+            "profile": row[3] or "",
+            "updated_at": row[4] or "",
+        }
+        for row in existing_rows
+    }
+    refresh_codes, missing_count, expired_count = select_refresh_codes(
+        ucodes, existing, args.asof, args.max_age_days
+    )
+    reused_count = len(ucodes) - len(refresh_codes)
+    print(
+        f"[cache] reuse={reused_count} refresh={len(refresh_codes)} "
+        f"(missing={missing_count}, expired={expired_count}, max_age={args.max_age_days}d)"
+    )
+
+    profiles = dict(existing)
+    refreshed = set()
+    for b in batched(refresh_codes, args.batch_size):
         try:
             r = basic_data(b, STOCK_FIELDS)
             for t in r.get("tables", []):
                 tbl = t.get("table", {})
-                profiles[t["thscode"]] = {
-                    "profile": (tbl.get("ths_corp_profile") or [""])[0],
-                    "industry": (tbl.get("ths_industry") or [""])[0],
-                }
+                code = t["thscode"]
+                old = profiles.get(code, {})
+                fetched_profile = (tbl.get("ths_corp_profile") or [""])[0]
+                profile = fetched_profile or old.get("profile", "")
+                industry = (tbl.get("ths_industry") or [""])[0] or old.get("industry", "")
+                if profile:
+                    profiles[code] = {**old, "profile": profile, "industry": industry}
+                if fetched_profile:
+                    refreshed.add(code)
         except Exception as e:
             print(f"[warn] profile batch err: {e}")
         time.sleep(0.18)
 
-    missing_industry = [code for code in ucodes if not (profiles.get(code, {}).get("industry") or "").strip()]
+    missing_industry = [
+        code for code in refreshed
+        if not (profiles.get(code, {}).get("industry") or "").strip()
+    ]
     if missing_industry:
         print(f"[industry-fallback] eastmoney for {len(missing_industry)} stocks")
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -101,10 +160,11 @@ def main():
         })
     json.dump({"asof": uni["asof"], "count": len(out_items), "items": out_items},
               open(args.out, "w"), ensure_ascii=False, indent=2)
-    print(f"[done] profile for {len(profiles)}/{len(ucodes)} stocks → {args.out}")
+    covered = sum(1 for code in ucodes if (profiles.get(code, {}).get("profile") or "").strip())
+    print(f"[done] profile coverage={covered}/{len(ucodes)} → {args.out}")
 
     # upsert to DuckDB
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     db_rows = [
         {
             "ucode": ucode,
@@ -113,13 +173,18 @@ def main():
             "main_business": profiles.get(ucode, {}).get("profile", ""),
             "updated_at": now,
         }
-        for ucode in ucodes
+        for ucode in refreshed
     ]
-    con = connect()
-    init_schema(con)
     n = db_upsert(con, "underlying_profile", db_rows, ["ucode"])
     con.close()
-    print(f"[db] underlying_profile upserted {n} rows")
+    failed = len(refresh_codes) - len(refreshed)
+    print(f"[db] underlying_profile refreshed={n} reused={reused_count} failed={failed}")
+    if failed:
+        print("[warn] failed refreshes kept their latest cached value when available")
+    if covered < len(ucodes) * 0.95:
+        raise RuntimeError(
+            f"underlying profile coverage too low: {covered}/{len(ucodes)}"
+        )
 
 
 if __name__ == "__main__":

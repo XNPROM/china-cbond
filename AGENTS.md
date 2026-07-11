@@ -207,6 +207,7 @@ Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in
 
 - **Directory layout**: `data/raw/asof=YYYY-MM-DD/` for raw snapshots, `reports/YYYY-MM-DD/` for output.
 - **All fetch scripts write both flat files AND upsert to DuckDB** — flat files for inspection, DB for SQL JOINs.
+- **Underlying profile cache**: `daily_refresh.py` checks `underlying_profile` on every run. Rows are refreshed from iFinD every 30 days; missing/new underlyings refresh immediately; otherwise the latest successful cached value is reused. Failed refreshes never blank an existing value. Use `--skip-profile` only for an intentional offline rebuild.
 - **Units**: balance in 亿元, price in 元, premium rates as percent (×100), volatility as annualized percent (×100).
 - **Python**: stdlib + `duckdb` + `jinja2` only. No pandas/numpy. Python 3.9+. Install: `pip install -r requirements.txt`.
 - **BS pricing** uses risk-free rate 2.5% (not YTM). Writes BS fields back into dataset.json in-place.
