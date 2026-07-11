@@ -180,11 +180,16 @@ def fetch_universe(date_ymd):
     return _recover_trading_bonds(bonds, date_ymd)
 
 
-def _delete_universe_orphans(con, active_codes):
-    """Delete universe rows absent from the authoritative current snapshot."""
+def _delete_universe_orphans(con, active_codes, min_active_ratio=0.90):
+    """Delete orphans unless the candidate snapshot looks materially partial."""
     codes = sorted(set(active_codes))
     if not codes:
         raise ValueError("refusing to clean universe with an empty active code set")
+
+    existing_count = con.execute("SELECT count(*) FROM universe").fetchone()[0]
+    active_ratio = len(codes) / existing_count if existing_count else 1.0
+    if active_ratio < min_active_ratio:
+        return None
 
     con.execute(
         "CREATE OR REPLACE TEMP TABLE active_universe_codes "
@@ -230,9 +235,21 @@ def save_to_db(bonds, date_ymd):
         orphan_codes = _delete_universe_orphans(
             con, (b["code"] for b in bonds)
         )
-        print(f"[db] universe deleted {len(orphan_codes)} orphan rows")
-        if orphan_codes:
-            print("[db] deleted orphan codes: " + ", ".join(orphan_codes))
+        if orphan_codes is None:
+            existing_count = con.execute(
+                "SELECT count(*) FROM universe"
+            ).fetchone()[0]
+            active_count = len({b["code"] for b in bonds})
+            print(
+                "[db][warning] skipped universe orphan cleanup: "
+                f"active snapshot {active_count}/{existing_count} "
+                f"({active_count / existing_count:.1%}) is below 90%; "
+                "upsert kept, existing rows preserved"
+            )
+        else:
+            print(f"[db] universe deleted {len(orphan_codes)} orphan rows")
+            if orphan_codes:
+                print("[db] deleted orphan codes: " + ", ".join(orphan_codes))
 
         # themes table: 申万行业作为一级主题兜底，正式题材仍由 generate_themes_* 覆写
         theme_rows = [{

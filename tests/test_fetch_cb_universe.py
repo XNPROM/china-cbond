@@ -27,20 +27,33 @@ def test_recovery_candidates_only_include_date_eligible_omissions():
 def test_delete_universe_orphans_keeps_exact_active_snapshot():
     con = duckdb.connect(":memory:")
     con.execute("CREATE TABLE universe (code TEXT PRIMARY KEY)")
+    active_codes = [f"11{i:04d}.SH" for i in range(10)]
     con.executemany(
         "INSERT INTO universe VALUES (?)",
-        [("111012.SH",), ("113575.SH",), ("110815.SH",)],
+        [(code,) for code in active_codes] + [("orphan",)],
     )
 
-    deleted = _delete_universe_orphans(
-        con, ["111012.SH", "113575.SH", "113575.SH"]
+    deleted = _delete_universe_orphans(con, active_codes + [active_codes[-1]])
+
+    assert deleted == ["orphan"]
+    assert [row[0] for row in con.execute(
+        "SELECT code FROM universe ORDER BY code"
+    ).fetchall()] == active_codes
+
+
+def test_delete_universe_orphans_skips_partial_snapshot():
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE universe (code TEXT PRIMARY KEY)")
+    existing_codes = [f"11{i:04d}.SH" for i in range(10)]
+    con.executemany(
+        "INSERT INTO universe VALUES (?)",
+        [(code,) for code in existing_codes],
     )
 
-    assert deleted == ["110815.SH"]
-    assert con.execute("SELECT code FROM universe ORDER BY code").fetchall() == [
-        ("111012.SH",),
-        ("113575.SH",),
-    ]
+    deleted = _delete_universe_orphans(con, existing_codes[:8])
+
+    assert deleted is None
+    assert con.execute("SELECT count(*) FROM universe").fetchone()[0] == 10
 
 
 def test_delete_universe_orphans_rejects_empty_snapshot():
