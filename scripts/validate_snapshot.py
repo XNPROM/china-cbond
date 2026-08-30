@@ -89,6 +89,15 @@ def validate(trade_date, dataset_path="", strict=False):
         [trade_date],
     ).fetchall()
     theme_bad_business = len(theme_bad_rows)
+    theme_empty_business = con.execute(
+        """
+        SELECT count(*)
+          FROM themes
+         WHERE trade_date = ?
+           AND (business_rewrite IS NULL OR trim(business_rewrite) = '')
+        """,
+        [trade_date],
+    ).fetchone()[0]
     strategy_total = con.execute(
         "SELECT count(*) FROM strategy_picks WHERE trade_date = ?", [trade_date]
     ).fetchone()[0]
@@ -104,6 +113,7 @@ def validate(trade_date, dataset_path="", strict=False):
     print(f"  vol_daily: {vol_total}")
     print(f"  themes: {theme_total}")
     print(f"  themes bad business_rewrite: {theme_bad_business}")
+    print(f"  themes empty business_rewrite: {theme_empty_business}")
     print(f"  strategy_picks: {strategy_total} {strategy_groups}")
 
     if universe_total < 250:
@@ -114,6 +124,11 @@ def validate(trade_date, dataset_path="", strict=False):
         failures.append(f"vol rows too small: {vol_total}")
     if theme_total < max(200, val_total * 0.6):
         failures.append(f"themes rows too small: {theme_total}")
+    if theme_empty_business > max(10, theme_total * 0.05):
+        failures.append(
+            f"themes business_rewrite empty too high: "
+            f"{theme_empty_business}/{theme_total}"
+        )
     if strategy_total == 0:
         warnings.append("strategy_picks empty")
 

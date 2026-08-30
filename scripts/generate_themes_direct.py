@@ -426,10 +426,24 @@ def _load_business_cache(con):
     return cache
 
 
-def _build_business_rewrite(uname: str, cache_row):
-    """Compose business_rewrite from LLM cache. Returns '' if no cache hit."""
+def _build_business_rewrite(uname: str, cache_row, profile: str = ""):
+    """Compose business_rewrite from the LLM cache, with a profile fallback.
+
+    The LLM cache is optional enrichment.  The iFinD profile is already a
+    usable source for the displayed main-business field, so a missing cache
+    row must not turn an otherwise complete report into a blank field.
+    """
     if not cache_row:
-        return ""
+        raw_profile = (profile or "").strip()
+        if not raw_profile:
+            return ""
+        fallback = _clean_profile(raw_profile)
+        if not fallback or fallback == f"{uname}。":
+            return ""
+        # Keep the report compact while retaining the main-business and
+        # product sentences that are normally present in the source profile.
+        sentences = re.split(r"(?<=[。！？])", fallback)
+        return "".join(sentences[:2]).strip()
     sentences = []
     mb = cache_row["main_business"]
     if mb:
@@ -523,6 +537,18 @@ def main():
             }
             for code, all_themes_json, industry in rows_raw
         }
+        # Remove rows left over from an older universe snapshot.  Keeping
+        # them makes validation count stale/blank records that are not part
+        # of the report being regenerated.
+        current_codes = {item["code"] for item in dataset.get("items", [])}
+        stale_codes = [code for code in existing_meta if code not in current_codes]
+        if stale_codes:
+            placeholders = ",".join("?" for _ in stale_codes)
+            con.execute(
+                f"DELETE FROM themes WHERE trade_date = ? AND code IN ({placeholders})",
+                [args.trade_date, *stale_codes],
+            )
+            print(f"[cleanup] removed {len(stale_codes)} stale theme rows")
 
     batch_rows = []
     processed = 0
@@ -543,7 +569,11 @@ def main():
             row = {
                 "code": item["code"],
                 "industry": industry,
-                "business_rewrite": _build_business_rewrite(item["uname"], biz_cache.get(item.get("ucode", ""))),
+                "business_rewrite": _build_business_rewrite(
+                    item["uname"],
+                    biz_cache.get(item.get("ucode", "")),
+                    item.get("profile", ""),
+                ),
                 "themes": themes,
             }
             out.write(json.dumps(row, ensure_ascii=False) + "\n")
