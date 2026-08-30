@@ -462,8 +462,7 @@ def filter_universe(bonds, min_balance=MIN_BALANCE_YI, max_price=MAX_PRICE):
 
 
 def _apply_pe_vol_filter(eligible):
-    """Apply PE>0 and vol>Q1 filters matching strategy_score.py."""
-    eligible = [b for b in eligible if b.get("pe_ttm") is not None and b["pe_ttm"] > 0]
+    """Apply the volatility filter; PE is intentionally not screened here."""
     eligible = [b for b in eligible if b.get("vol_20d") is not None]
     if not eligible:
         return eligible
@@ -769,14 +768,9 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
             sample = fundamentals.get(rebalance_date_list[0], {})
             n_complete = sum(1 for v in sample.values()
                             if v.get("conv_prem") is not None
-                            and v.get("pe_ttm") is not None
                             and v.get("vol_20d") is not None)
             if n_complete < 50:
                 print(f"[warn] Only {n_complete} bonds have complete fundamentals on {rebalance_date_list[0]}")
-                if basic_data is not None:
-                    print("[info] Fetching underlying stock PE from iFinD to supplement DB data...")
-                    pe_map = fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd)
-                    merge_pe_into_fundamentals(fundamentals, code_to_ucode, pe_map)
                 print("[vol] computing 20-day realized volatility from prices...")
                 vol_map = compute_vol_from_prices(prices, trading_dates, rebalance_ymds)
                 merge_vol_into_fundamentals(fundamentals, vol_map)
@@ -797,11 +791,6 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
         n_px = persist_prices_to_db(prices, codes_set)
         n_fund = persist_fundamentals_to_db(fundamentals)
         print(f"[persist] wrote {n_px} price rows + {n_fund} fundamental rows to DB")
-
-        # Supplement with bulk PE if still sparse
-        if basic_data is not None:
-            pe_map = fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd)
-            merge_pe_into_fundamentals(fundamentals, code_to_ucode, pe_map)
 
         print("[vol] computing 20-day realized volatility from prices...")
         vol_map = compute_vol_from_prices(prices, trading_dates, rebalance_ymds)
@@ -1019,7 +1008,7 @@ def print_summary(args, results, equity_history, turnover_history, trading_dates
     print(f"回测区间: {actual_start} -> {actual_end} ({n_actual_days} 个交易日)")
     print(f"调仓频率: {args.rebalance} (共{len(results)}次有效调仓, T日选券->T+1买入->下次调仓卖出)")
     print(f"交易成本: 滑点{args.slippage_bps}bps(单边)+佣金{args.commission_bps}bps(往返), 仅换手部分收费")
-    print(f"Universe: 余额>={MIN_BALANCE_YI}亿 + 价格<={MAX_PRICE}元 + PE>0 + vol>Q1")
+    print(f"Universe: 余额>={MIN_BALANCE_YI}亿 + 价格<={MAX_PRICE}元 + vol>=Q1（不筛PE）")
     print(f"最少持仓: {MIN_HOLDINGS}只 (不足则该策略当期N/A)")
     print(f"分域标准: 偏股(Delta>=0.6) 平衡(0.3<=Delta<0.6) 偏债(Delta<0.3)")
     print(f"停牌处理: 无卖出价按0%收益计入")
