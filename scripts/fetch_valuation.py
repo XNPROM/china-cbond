@@ -45,6 +45,10 @@ def _i(v):
         return None
 
 
+def _present(v):
+    return v is not None and v != ""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--codes", required=True, help="codes.txt, one per line")
@@ -100,10 +104,14 @@ def main():
     ]
 
     rows = {}
+    valuation_batches_ok = 0
     for b in batched(codes, args.batch_size):
         try:
             r = basic_data(b, indipara)
-            for t in r.get("tables", []):
+            tables = r.get("tables", [])
+            if not tables:
+                raise RuntimeError("empty basic_data response")
+            for t in tables:
                 tbl = t.get("table", {})
                 rows[t["thscode"]] = {
                     "conv_prem":           (tbl.get("ths_conversion_premium_rate_cbond") or [None])[0],
@@ -132,6 +140,7 @@ def main():
                     "pure_bond_value":     (tbl.get("ths_pure_bond_value_cbond") or [None])[0],
                     "maturity_call_price": (tbl.get("ths_maturity_redemp_price_cbond") or [None])[0],
                 }
+            valuation_batches_ok += 1
         except Exception as e:
             print(f"[warn] valuation batch err: {e}")
         time.sleep(0.15)
@@ -140,7 +149,10 @@ def main():
     for b in batched(codes, 80):
         try:
             r = history(b, "close,changeRatio", args.date, args.date)
-            for t in r.get("tables", []):
+            tables = r.get("tables", [])
+            if not tables:
+                raise RuntimeError("empty history response")
+            for t in tables:
                 table = t.get("table", {})
                 rows.setdefault(t["thscode"], {})["latest"] = (table.get("close") or [None])[0]
                 rows.setdefault(t["thscode"], {})["change_pct"] = (table.get("changeRatio") or [None])[0]
@@ -150,6 +162,7 @@ def main():
 
     # 正股 PE_TTM + 总市值
     stock_data = {}
+    stock_batches_ok = 0
     stock_fields = [
         {"indicator": "ths_pe_ttm",              "indiparams": [args.date]},
         {"indicator": "ths_market_value_stock",  "indiparams": [args.date]},
@@ -157,17 +170,44 @@ def main():
     for b in batched(ucodes, args.batch_size):
         try:
             r = basic_data(b, stock_fields)
-            for t in r.get("tables", []):
+            tables = r.get("tables", [])
+            if not tables:
+                raise RuntimeError("empty stock basic_data response")
+            for t in tables:
                 tbl = t.get("table", {})
                 pe = (tbl.get("ths_pe_ttm") or [None])[0]
                 mv_raw = (tbl.get("ths_market_value_stock") or [None])[0]
                 mv_yi = round(mv_raw / 1e8, 2) if mv_raw else None
                 stock_data[t["thscode"]] = {"pe_ttm": pe, "total_mv_yi": mv_yi}
+            stock_batches_ok += 1
         except Exception as e:
             print(f"[warn] stock batch err: {e}")
         time.sleep(0.15)
     print(f"[stock] PE non-null: {sum(1 for v in stock_data.values() if v.get('pe_ttm') is not None)}, "
           f"MV non-null: {sum(1 for v in stock_data.values() if v.get('total_mv_yi') is not None)}")
+
+    # Do not write a blank snapshot when iFinD is unavailable. Previously the
+    # batch exceptions were swallowed, then NULL rows were upserted into
+    # DuckDB and a report was rendered before validation could stop publish.
+    required_fields = [
+        "latest", "conv_prem", "pure_prem", "pure_bond_value",
+        "maturity_call_price",
+    ]
+    min_rows = max(1, int(len(codes) * 0.95))
+    coverage = {
+        field: sum(_present(row.get(field)) for row in rows.values())
+        for field in required_fields
+    }
+    print(f"[quality] valuation_batches={valuation_batches_ok} "
+          f"stock_batches={stock_batches_ok} rows={len(rows)}/{len(codes)} "
+          f"coverage={coverage}")
+    bad = [f"{field}={n}/{len(codes)}" for field, n in coverage.items() if n < min_rows]
+    if len(rows) < min_rows or bad:
+        raise RuntimeError(
+            "valuation snapshot incomplete; refusing to overwrite DuckDB or publish: "
+            f"rows={len(rows)}/{len(codes)}, required>={min_rows}, "
+            f"bad_fields={', '.join(bad) or 'none'}"
+        )
 
     # CSV 输出（30 列）
     with open(args.out, "w", newline="") as f:

@@ -9,6 +9,15 @@ set -u
 REPO_ROOT="/Users/apple/cbond_monitor"
 cd "$REPO_ROOT" || { echo "[fatal] cannot cd $REPO_ROOT"; exit 1; }
 
+# Avoid two launchd wakeups (or a manual run) refreshing the shared DuckDB and
+# iFinD token cache at the same time. mkdir is atomic on macOS.
+LOCK_DIR="$REPO_ROOT/data/.auto_daily.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "[skip] another auto_daily instance is already running" >&2
+  exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
 # Ensure PATH covers git / ssh under launchd's minimal environment.
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
@@ -20,10 +29,11 @@ LOG="$LOG_DIR/auto_${DATE}.log"
 
 # Skip if today's report already exists with real data (prevents duplicate runs on wake/boot)
 # HTML must be > 500KB to count as a valid report; smaller files = failed runs that need retry
-if [ -z "${1:-}" ] && [ -f "reports/${DATE}/cbond_overview.html" ]; then
+if [ -z "${1:-}" ] && [ -f "reports/${DATE}/cbond_overview.html" ] \
+   && git ls-files --error-unmatch "reports/${DATE}/cbond_overview.html" >/dev/null 2>&1; then
   SIZE=$(stat -f%z "reports/${DATE}/cbond_overview.html" 2>/dev/null || echo 0)
   if [ "$SIZE" -gt 524288 ]; then
-    echo "[skip] $(date -Iseconds) auto_daily for $DATE — report already exists (${SIZE} bytes)" >> "$LOG"
+    echo "[skip] $(date -Iseconds) auto_daily for $DATE — report already published (${SIZE} bytes)" >> "$LOG"
     exit 0
   fi
   echo "[retry] $(date -Iseconds) auto_daily for $DATE — previous report too small (${SIZE} bytes), re-running" >> "$LOG"

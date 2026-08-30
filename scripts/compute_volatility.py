@@ -86,6 +86,16 @@ def main():
                 print(f"[warn]   retry err {code}: {e}")
             time.sleep(0.15)
 
+    valid_vols = sum(1 for v in vols.values() if v.get("vol") is not None)
+    min_valid = max(1, int(len(ucodes) * 0.95))
+    print(f"[quality] volatility coverage={valid_vols}/{len(ucodes)} "
+          f"(required>={min_valid})")
+    if valid_vols < min_valid:
+        raise RuntimeError(
+            "volatility snapshot incomplete; refusing to overwrite DuckDB or publish: "
+            f"valid={valid_vols}/{len(ucodes)}, required>={min_valid}"
+        )
+
     # emit per-bond (dup volatility across bonds sharing ucode)
     with open(args.out, "w", newline="") as f:
         w = csv.writer(f)
