@@ -446,10 +446,12 @@ def _percentile(sorted_vals, pct):
 # ── Universe filter ──────────────────────────────────────────────────
 
 def filter_universe(bonds, min_balance=MIN_BALANCE_YI, max_price=MAX_PRICE):
-    """Pre-filter: liquidity + basic data completeness; price cap is optional."""
+    """Pre-filter: liquidity + non-ST underlying + basic data completeness."""
     out = []
     for b in bonds:
         if b.get("conv_prem") is None:
+            continue
+        if _is_st_name(b.get("uname")):
             continue
         px = b.get("price")
         if not px or px <= 0:
@@ -461,6 +463,12 @@ def filter_universe(bonds, min_balance=MIN_BALANCE_YI, max_price=MAX_PRICE):
             continue
         out.append(b)
     return out
+
+
+def _is_st_name(name):
+    """Return True for underlying stock names beginning with ST or *ST."""
+    normalized = str(name or "").strip().upper()
+    return normalized.startswith("ST") or normalized.startswith("*ST")
 
 
 def _apply_pe_vol_filter(eligible):
@@ -678,6 +686,49 @@ def load_universe_codes(start_ymd, end_ymd):
     return codes, code_to_ucode
 
 
+def load_universe_names_asof(rebalance_dates):
+    """Load underlying stock names from the latest snapshot on each date."""
+    import glob
+
+    snapshot_paths = {}
+    for path in glob.glob("data/raw/asof=????-??-??/dataset.json"):
+        snapshot_date = os.path.basename(os.path.dirname(path)).replace("asof=", "").replace("-", "")
+        if len(snapshot_date) == 8:
+            snapshot_paths[snapshot_date] = path
+
+    con = connect()
+    rows = con.execute("SELECT code, uname FROM universe").fetchall()
+    con.close()
+    current_names = {code: (uname or "") for code, uname in rows}
+
+    result = {}
+    fallback_dates = []
+    for rebalance_date in sorted(rebalance_dates):
+        eligible_dates = [d for d in snapshot_paths if d <= rebalance_date]
+        if not eligible_dates:
+            result[rebalance_date] = current_names
+            fallback_dates.append(rebalance_date)
+            continue
+        snapshot_date = max(eligible_dates)
+        try:
+            with open(snapshot_paths[snapshot_date], encoding="utf-8") as f:
+                dataset = json.load(f)
+            result[rebalance_date] = {
+                item.get("code"): (item.get("uname") or "")
+                for item in dataset.get("items", [])
+                if item.get("code")
+            }
+        except (OSError, ValueError, TypeError):
+            result[rebalance_date] = current_names
+            fallback_dates.append(rebalance_date)
+
+    if fallback_dates:
+        print(f"[st-filter] no historical snapshot for {len(fallback_dates)} dates; used current universe names")
+    else:
+        print(f"[st-filter] loaded historical underlying names for {len(result)} rebalance dates")
+    return result
+
+
 def load_prices_and_dates(args, codes, start_ymd, end_ymd):
     """Load prices and derive trading dates."""
     if args.from_db:
@@ -816,6 +867,13 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
         pe_con.close()
         print(f"[persist] updated {pe_persist_count} PE values in DB")
 
+    # The valuation table does not carry the underlying stock name. Enrich
+    # each rebalance snapshot before the ST/*ST universe filter is applied.
+    uname_maps = load_universe_names_asof(rebalance_date_list)
+    for ymd, fund_map in fundamentals.items():
+        uname_map = uname_maps.get(ymd, {})
+        for code, f in fund_map.items():
+            f["uname"] = uname_map.get(code, "")
     return fundamentals
 
 
@@ -878,6 +936,7 @@ def build_day_bonds(prices, fund, td_select):
             "price": px,
             "conv_prem": f.get("conv_prem"),
             "balance": f.get("balance"),
+            "uname": f.get("uname", ""),
             "pe_ttm": f.get("pe_ttm"),
             "vol_20d": f.get("vol_20d"),
             "delta": raw_delta,
@@ -1011,7 +1070,7 @@ def print_summary(args, results, equity_history, turnover_history, trading_dates
     print(f"调仓频率: {args.rebalance} (共{len(results)}次有效调仓, T日选券->T+1买入->下次调仓卖出)")
     print(f"交易成本: 滑点{args.slippage_bps}bps(单边)+佣金{args.commission_bps}bps(往返), 仅换手部分收费")
     price_rule = f"价格<={MAX_PRICE}元" if MAX_PRICE is not None else "不设价格上限"
-    print(f"Universe: 余额>={MIN_BALANCE_YI}亿 + {price_rule} + vol>=Q1（不筛PE）")
+    print(f"Universe: 余额>={MIN_BALANCE_YI}亿 + {price_rule} + 排除ST/*ST + vol>=Q1（不筛PE）")
     print(f"最少持仓: {MIN_HOLDINGS}只 (不足则该策略当期N/A)")
     print(f"分域标准: 偏股(Delta>=0.6) 平衡(0.3<=Delta<0.6) 偏债(Delta<0.3)")
     print(f"停牌处理: 无卖出价按0%收益计入")
@@ -1073,6 +1132,7 @@ def save_output(args, summary_info, end_ymd, strategies, use_eq_weight_bench, ho
         "sector_method": "delta",
         "min_balance_yi": MIN_BALANCE_YI,
         "max_price": MAX_PRICE,
+        "exclude_st": True,
         "min_holdings": MIN_HOLDINGS,
         "benchmark": "000832.CSI" if not use_eq_weight_bench else "equal_weight",
     }
@@ -1119,7 +1179,7 @@ def main():
     print(f"[backtest] {start_ymd} -> {end_ymd}")
     print(f"[costs] slippage={args.slippage_bps}bps one-way, commission={args.commission_bps}bps total")
     price_rule = f"price<={MAX_PRICE}" if MAX_PRICE is not None else "no price cap"
-    print(f"[filter] balance>={MIN_BALANCE_YI}yi, {price_rule}, min_holdings={MIN_HOLDINGS}")
+    print(f"[filter] balance>={MIN_BALANCE_YI}yi, {price_rule}, exclude_st=true, min_holdings={MIN_HOLDINGS}")
 
     if not args.from_db and basic_data is None:
         print("[warn] iFinD not available, falling back to --from-db mode")
