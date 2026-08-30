@@ -6,6 +6,8 @@ on:
     paths:
       - 'reports/*/cbond_overview.html'
       - 'reports/*/cbond_overview.md'
+      - 'reports/*/index.html'
+      - 'reports/index.html'
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
@@ -42,9 +44,11 @@ jobs:
           mkdir -p _site
           for dir in $(ls -d reports/????-??-??/ 2>/dev/null | sort -r); do
             date=$(basename "$dir")
-            [ -f "$dir/cbond_overview.html" ] || continue
+            source="$dir/cbond_overview.html"
+            [ -f "$source" ] || source="$dir/index.html"
+            [ -f "$source" ] || continue
             mkdir -p "_site/$date"
-            cp "$dir/cbond_overview.html" "_site/$date/index.html"
+            cp "$source" "_site/$date/index.html"
           done
 
       - name: Inject date dropdown + homepage redirect
