@@ -284,6 +284,13 @@ def main():
         render_cmd += ["--backtest", backtest_json]
     render_cmd += ["--update-index"]
     _run_step(trade_date, "render_html", render_cmd, cwd)
+    # GitHub Pages publishes the per-date index.html when present.  Keep it
+    # synchronized with the canonical renderer output so a newer daily run
+    # cannot be shadowed by an older committed index page.
+    import shutil
+    overview_index = os.path.join(report_dir, "index.html")
+    shutil.copyfile(overview_html, overview_index)
+    print(f"[sync] {overview_index} <- {overview_html}")
 
     validate_cmd = [
         PY, "scripts/validate_snapshot.py",

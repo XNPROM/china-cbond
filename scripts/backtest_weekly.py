@@ -738,6 +738,14 @@ def compute_rebalance_schedule(args, trading_dates, start_ymd, end_ymd):
         rebalance_indices = list(range(len(trading_dates) - 1))
         holding = 1
 
+    # A T+1 strategy needs at least one trading day after the selection date
+    # to enter the position.  Do not create a zero-length final period when
+    # the last available DB date is itself the final trading day.
+    rebalance_indices = [
+        idx for idx in rebalance_indices
+        if idx + 1 < len(trading_dates) - 1
+    ]
+
     print(f"[rebalance] {args.rebalance} mode, {len(rebalance_indices)} rebalance points, holding {holding} days")
     return rebalance_indices, holding
 
