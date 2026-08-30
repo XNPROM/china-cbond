@@ -31,7 +31,7 @@ COMMISSION_BPS = 2      # round-trip commission (0.02%), split half buy / half s
 
 # ── Universe filters ─────────────────────────────────────────────────
 MIN_BALANCE_YI = 2.0    # minimum outstanding balance in yi (2 yi = 200M CNY)
-MAX_PRICE = 150.0       # exclude bonds priced above 150
+MAX_PRICE = None        # no hard price cap in weekly backtest
 MIN_HOLDINGS = 5        # strategy returns N/A if fewer picks available
 
 
@@ -446,13 +446,15 @@ def _percentile(sorted_vals, pct):
 # ── Universe filter ──────────────────────────────────────────────────
 
 def filter_universe(bonds, min_balance=MIN_BALANCE_YI, max_price=MAX_PRICE):
-    """Pre-filter: liquidity + price cap + basic data completeness."""
+    """Pre-filter: liquidity + basic data completeness; price cap is optional."""
     out = []
     for b in bonds:
         if b.get("conv_prem") is None:
             continue
         px = b.get("price")
-        if not px or px <= 0 or px > max_price:
+        if not px or px <= 0:
+            continue
+        if max_price is not None and px > max_price:
             continue
         bal = b.get("balance")
         if not bal or bal < min_balance:
@@ -1008,7 +1010,8 @@ def print_summary(args, results, equity_history, turnover_history, trading_dates
     print(f"回测区间: {actual_start} -> {actual_end} ({n_actual_days} 个交易日)")
     print(f"调仓频率: {args.rebalance} (共{len(results)}次有效调仓, T日选券->T+1买入->下次调仓卖出)")
     print(f"交易成本: 滑点{args.slippage_bps}bps(单边)+佣金{args.commission_bps}bps(往返), 仅换手部分收费")
-    print(f"Universe: 余额>={MIN_BALANCE_YI}亿 + 价格<={MAX_PRICE}元 + vol>=Q1（不筛PE）")
+    price_rule = f"价格<={MAX_PRICE}元" if MAX_PRICE is not None else "不设价格上限"
+    print(f"Universe: 余额>={MIN_BALANCE_YI}亿 + {price_rule} + vol>=Q1（不筛PE）")
     print(f"最少持仓: {MIN_HOLDINGS}只 (不足则该策略当期N/A)")
     print(f"分域标准: 偏股(Delta>=0.6) 平衡(0.3<=Delta<0.6) 偏债(Delta<0.3)")
     print(f"停牌处理: 无卖出价按0%收益计入")
@@ -1115,7 +1118,8 @@ def main():
     end_ymd = _yyyymmdd(end_dt)
     print(f"[backtest] {start_ymd} -> {end_ymd}")
     print(f"[costs] slippage={args.slippage_bps}bps one-way, commission={args.commission_bps}bps total")
-    print(f"[filter] balance>={MIN_BALANCE_YI}yi, price<={MAX_PRICE}, min_holdings={MIN_HOLDINGS}")
+    price_rule = f"price<={MAX_PRICE}" if MAX_PRICE is not None else "no price cap"
+    print(f"[filter] balance>={MIN_BALANCE_YI}yi, {price_rule}, min_holdings={MIN_HOLDINGS}")
 
     if not args.from_db and basic_data is None:
         print("[warn] iFinD not available, falling back to --from-db mode")
