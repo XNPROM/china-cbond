@@ -12,6 +12,8 @@ import time
 
 import requests
 
+from _network import configure_session
+
 CACHE_CANDIDATES = [
     os.path.expanduser("~/.codex_logs/ifind_access_token_cache.json"),
     "/Users/apple/Desktop/投资计划/.codex_logs/ifind_access_token_cache.json",
@@ -20,6 +22,10 @@ REFRESH_TOKEN_FILE = os.path.expanduser("~/.codex_logs/ifind_refresh_token.txt")
 AUTH_URL = "https://quantapi.51ifind.com/api/v1/get_access_token"
 MAX_AGE = 6 * 3600  # 6h; iFinD access_token TTL is ~8h
 AUTH_RETRIES = 3
+
+
+def _configure_session(session):
+    return configure_session(session)
 
 
 def _cache_path():
@@ -56,8 +62,7 @@ def _fetch_fresh():
         if tok:
             return tok
 
-        session = requests.Session()
-        session.trust_env = False
+        session = _configure_session(requests.Session())
         last_exc = None
         for attempt in range(AUTH_RETRIES):
             try:

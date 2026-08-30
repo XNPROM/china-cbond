@@ -4,97 +4,56 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Chinese convertible bond (可转债) panorama scanner. Produces a themed, interactive HTML report covering all tradable CBs (~335), grouped by high-level theme tags. Data sourced from iFinD quant API; themes classified locally via keyword rules + Shenwan industry from data_pool.
+Chinese convertible bond (可转债) panorama scanner. Produces a themed, interactive HTML report covering the currently tradable public CB universe (usually 300+; the exact count is determined by the dated `p05479` snapshot), grouped by high-level theme tags. Data sourced from iFinD quant API; themes classified locally via keyword rules + Shenwan industry from data_pool.
 
-## Daily Refresh (8-step pipeline, ~4min total)
+## Daily Refresh (canonical pipeline and acceptance)
+
+For every local refresh, follow the project-specific `cbond-monitor` skill and the detailed rules in `AGENTS.md`. This file is a Claude entry point; do not maintain a second, conflicting copy of the workflow. The Markdown report is an output artifact, not the execution engine.
 
 ```bash
-ASOF=2026-04-22
-
-# 1. Valuation snapshot + PE + market cap (~2min)
-python3 scripts/fetch_valuation.py \
-    --codes    data/raw/asof=2026-04-20/cbond_codes.txt \
-    --universe data/raw/asof=2026-04-20/cbond_universe.json \
-    --date     $ASOF \
-    --out      data/raw/asof=$ASOF/valuation.csv
-
-# 2. 20-day annualized volatility (~1.5min)
-python3 scripts/compute_volatility.py \
-    --universe data/raw/asof=2026-04-20/cbond_universe.json \
-    --asof     $ASOF \
-    --lookback-days 45 \
-    --out data/raw/asof=$ASOF/vol_20d.csv
-
-# 3. Assemble dataset (instant; SQL JOIN from DuckDB)
-python3 scripts/assemble_dataset.py \
-    --trade-date $ASOF \
-    --out data/raw/asof=$ASOF/dataset.json
-
-# 4. BS pricing + Greek letters (instant; pure math, no API calls)
-#    Writes BS fields to DB AND back into dataset.json in-place.
-python3 scripts/bs_pricing.py \
-    --dataset    data/raw/asof=$ASOF/dataset.json \
-    --trade-date $ASOF
-
-# 5. Strategy scoring — double-low + sector-neutral + 低估 (instant)
-python3 scripts/strategy_score.py \
-    --dataset   data/raw/asof=$ASOF/dataset.json \
-    --trade-date $ASOF \
-    --out       data/raw/asof=$ASOF/strategy_picks.jsonl
-
-# 6. Theme classification — local rules + Shenwan industry (instant)
-python3 scripts/generate_themes_direct.py \
-    --dataset data/raw/asof=$ASOF/dataset.json \
-    --out     data/raw/asof=$ASOF/themes.jsonl \
-    --trade-date $ASOF
-
-# 7. Build Markdown (instant; reads themes + strategy from DB)
-python3 scripts/build_overview_md.py \
-    --dataset    data/raw/asof=$ASOF/dataset.json \
-    --trade-date $ASOF \
-    --out        reports/$ASOF/cbond_overview.md \
-    --title-date $ASOF
-
-# 8. Render HTML (instant; local only, no LLM; requires jinja2)
-python3 scripts/render_html.py \
-    --in         reports/$ASOF/cbond_overview.md \
-    --out        reports/$ASOF/cbond_overview.html \
-    --title      "可转债概览 · $ASOF" \
-    --trade-date $ASOF \
-    --backtest   data/raw/asof=$ASOF/backtest_weekly.json
+cd /Users/apple/cbond_monitor
+ASOF=YYYY-MM-DD
+caffeinate -i /usr/local/bin/python3.12 scripts/daily_refresh.py \
+    --trade-date "$ASOF"
 ```
+
+Pipeline order: check for a complete exact-date local universe snapshot and reuse it when present (otherwise fetch the as-of universe from iFinD `p05479`) → fetch and audit close prices for exactly that code set → refresh stale bond-side fields and due underlying profiles → compute volatility → assemble the dated dataset → BS pricing → strategy scoring → theme/business cache and classification → Markdown report → optional backtest → strict snapshot validation → local HTML/index rendering. Only after the gates pass does `auto_daily.sh` commit and push; GitHub Actions packages and deploys the pre-rendered HTML and does not reconstruct the backtest from Markdown.
+
+The default reuses the exact-date local snapshot when its two universe files are valid and consistent. `--refresh-universe` explicitly forces a new universe fetch. `--skip-fetch` is for an intentional offline/local rebuild and reuses the newest complete snapshot on or before the target date. `scripts/_network.py` selects direct/TUN versus environment proxy per iFinD request. The acceptance artifacts are `data/raw/asof=YYYY-MM-DD/quote_audit.json`, the strict `validate_snapshot.py` result, dated `cbond_overview.md`, `cbond_overview.html`, `index.html`, and (when enabled) `backtest_weekly.json`.
 
 ## First-time Setup / Rebuild DB
 
 ```bash
-python3 scripts/init_db.py
-python3 scripts/fetch_cb_universe.py --date 20260424
-python3 scripts/backfill.py --raw data/raw/asof=2026-04-20 --trade-date 2026-04-20
+python3.12 scripts/init_db.py
+python3.12 scripts/fetch_cb_universe.py --date 2026-04-24
+python3.12 scripts/backfill.py \
+    --raw data/raw/asof=2026-04-20 \
+    --trade-date 2026-04-20
 ```
 
 ## Full Universe Fetch (one-call, ~30s)
 
 ```bash
-python3 scripts/fetch_cb_universe.py --date 20260424
+python3.12 scripts/fetch_cb_universe.py --date 2026-04-24
 ```
 
-Uses iFinD `data_pool` p05479 endpoint — returns all listed CBs with Shenwan industry in one API call.
+Uses iFinD `data_pool` p05479 endpoint. The post-filter `cbond_codes.txt` is the exact expected list for the subsequent quote audit; do not infer the expected count from DuckDB or an older snapshot.
 
-## Backtest (weekly rebalance + T+1 entry)
+## Backtest (daily/weekly rebalance + T+1 entry)
 
 ```bash
-python3 scripts/backtest_weekly.py --start-date 2026-01-23 --end-date 2026-04-23
+python3.12 scripts/backtest_weekly.py --start-date 2026-01-23 --end-date 2026-04-23
 ```
 
-Features: multiplicative compounding, configurable slippage/commission, PE>0 + vol>Q1 filters matching live strategy, historical universe from valuation_daily.
+Features: multiplicative compounding, configurable slippage/commission, historical universe from valuation_daily, exclusion of ST/*ST underlying stocks, balance >= 2亿元, no hard price cap, and volatility >= Q1. PE remains an informational field but is not a weekly-backtest filter. The engine currently supports daily and weekly rebalancing; monthly rebalancing is not yet implemented.
 
-## One-Command Refresh (dev-1 only)
+## One-Command Refresh
 
 ```bash
-python3 scripts/daily_refresh.py --trade-date 2026-04-24
+python3.12 scripts/daily_refresh.py --trade-date 2026-04-24
 ```
 
-Runs the full 8-step pipeline in sequence: fetch_cb_universe → fetch_valuation → refresh_data → compute_volatility → assemble_dataset → bs_pricing → strategy_score → ensure_themes → build_overview_md → backtest_weekly → render_html → validate_snapshot. Each step writes to `etl_runs` table. Supports `--skip-fetch`, `--skip-valuation`, `--skip-vol`, `--skip-backtest` to skip API-dependent steps when re-running with existing data.
+Runs the full pipeline in sequence: fetch_cb_universe → refresh_underlying_profile → fetch_valuation/quote_audit → refresh_data → compute_volatility → assemble_dataset → bs_pricing → strategy_score → ensure_themes → generate_themes_direct → build_overview_md → backtest_weekly → validate_snapshot → render_html/index. Each step writes to `etl_runs` where applicable. Supports `--skip-fetch`, `--skip-profile`, `--skip-valuation`, `--skip-vol`, and `--skip-backtest`; skipped API steps are for controlled rebuilds only.
 
 ## 主营业务 LLM 缓存 (underlying_business)
 
@@ -165,7 +124,7 @@ python3 scripts/refresh_data.py --trade-date 2026-04-24 --fix
 python3 scripts/refresh_data.py --trade-date 2026-04-24 --fix --force
 ```
 
-After refreshing, re-run steps 3–8 of the pipeline.
+After refreshing, rerun the local pipeline from dataset assembly, then run strict snapshot validation before rendering HTML.
 
 ## Architecture
 
@@ -174,9 +133,11 @@ After refreshing, re-run steps 3–8 of the pipeline.
 ```
 iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
                       ↓
-                  DuckDB (data/cbond.duckdb) ← 7 tables
+                  DuckDB (data/cbond.duckdb) ← 8 tables
                       ↓
-            assemble_dataset.py (SQL JOIN) → dataset.json
+            fetch_valuation.py → quote_audit.json + valuation.csv
+                      ↓
+            assemble_dataset.py (SQL JOIN) → dated dataset.json
                       ↓
             bs_pricing.py → DB upsert + dataset.json in-place (bs_value, relative_value, greeks)
                       ↓
@@ -186,7 +147,9 @@ iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
                       ↓
          build_overview_md.py (reads themes + strategy from DB) → .md
                       ↓
-         render_html.py → .html (with equity curve chart)
+         validate_snapshot.py → strict publication gate
+                      ↓
+         render_html.py → .html/index.html (with equity curve chart)
 ```
 
 ### Active Scripts
@@ -195,32 +158,33 @@ iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
 |---|---|
 | `_auth.py` | iFinD access_token lifecycle (cache 6h, refresh_token 1y) |
 | `_db.py` | DuckDB connect, `init_schema()` (runs once per session), generic `upsert()` |
-| `_ifind.py` | HTTP wrappers: `basic_data`, `realtime`, `history`, `ths_dr` (data_pool) |
+| `_network.py` | Detect Clash TUN and select direct/TUN or environment-proxy routing |
+| `_ifind.py` | HTTP wrappers: `basic_data`, `history`, `realtime`, `ths_dr` (data_pool) |
 | `fetch_cb_universe.py` | Full CB universe + Shenwan industry via data_pool p05479 |
-| `fetch_valuation.py` | Daily valuation snapshot (26 indicators) |
+| `fetch_valuation.py` | Daily valuation snapshot plus exact close-quote audit (`quote_audit.json`) |
 | `fetch_underlying_profile.py` | Underlying stock company profile + industry |
 | `compute_volatility.py` | 20-day annualized vol for underlying stocks |
-| `assemble_dataset.py` | SQL JOIN across 4 tables → dataset.json |
+| `assemble_dataset.py` | SQL JOIN across the dated DuckDB snapshot → dataset.json |
 | `bs_pricing.py` | BS pricing + Greek letters (r=2.5% risk-free) |
 | `strategy_score.py` | Double-low + sector-neutral + low-RV scoring |
 | `generate_themes_direct.py` | Keyword + Shenwan theme classification |
 | `build_overview_md.py` | Markdown report from dataset + DB |
 | `render_html.py` | Interactive HTML dashboard (Jinja2 + ECharts) |
 | `render_markdown_parser.py` | Markdown parser + helpers (extracted from render_html) |
-| `backtest_weekly.py` | Weekly-rebalanced backtest engine |
+| `backtest_weekly.py` | Daily/weekly-rebalanced backtest engine (monthly not implemented) |
 | `backfill.py` | One-shot raw data loader into DuckDB |
 | `init_db.py` | Idempotent schema initializer |
 | `refresh_data.py` | Data freshness check + iFinD re-fetch for stale fields |
 | `_etl_log.py` | ETL run logging context manager (writes to `etl_runs` table) |
 | `analyze_business_llm.py` | LLM 抽取主营业务 → `underlying_business`，profile_hash 增量 |
-| `validate_data.py` | Data quality validation (universe size, field completeness, value ranges) |
+| `validate_data.py` | Legacy dataset validator; use `validate_snapshot.py` for the current dated snapshot gate |
 | `report_view_model.py` | Dashboard payload builder (normalizes parsed markdown → JSON view model for HTML) |
 | `daily_refresh.py` | One-command end-to-end refresh orchestrator (串行 ETL 入口, writes `etl_runs`) |
-| `validate_snapshot.py` | Snapshot quality check (universe/valuation/vol/themes/strategy row counts + field null rates) |
+| `validate_snapshot.py` | Snapshot quality check plus exact expected-code vs dated price coverage gate |
 
 Archived scripts in `scripts/archive/`: `discover_universe.py`, `generate_themes_with_claude.py`, `load_themes.py`, `sample_one.py`, `build_strategy_page.py`.
 
-### DuckDB Schema (7 tables + indexes)
+### DuckDB Schema (8 tables + indexes)
 
 | Table | PK | Grain |
 |---|---|---|
@@ -265,17 +229,17 @@ Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in
 
 ## Testing
 
-Tests use `unittest` (no pytest dependency). All test files are in `tests/`.
+Tests use pytest and are all under `tests/`. The exact count can change as coverage grows; the latest baseline should be recorded from `pytest -q` rather than hard-coded in this document.
 
 ```bash
 # Run all tests
-python -m pytest tests/
+python3.12 -m pytest -q
 
 # Run a single test file
-python -m unittest tests/test_bs_pricing.py
+python3.12 -m pytest -q tests/test_bs_pricing.py
 
 # Run a single test case
-python -m unittest tests.test_bs_pricing.BSCallTests.test_typical_cbond_pricing
+python3.12 -m pytest -q tests/test_bs_pricing.py -k typical_cbond_pricing
 ```
 
 Test files: `test_bs_pricing.py` (BS model + Greeks), `test_strategy_score.py` (double-low scoring + sector classification), `test_render_markdown_parser.py`, `test_report_view_model.py`. All tests import from `scripts/` via `sys.path.insert`.
@@ -285,7 +249,9 @@ Test files: `test_bs_pricing.py` (BS model + Greeks), `test_strategy_score.py` (
 - **Directory layout**: `data/raw/asof=YYYY-MM-DD/` for raw snapshots, `reports/YYYY-MM-DD/` for output.
 - **All fetch scripts write both flat files AND upsert to DuckDB** — flat files for inspection, DB for SQL JOINs.
 - **Units**: balance in 亿元, price in 元, premium rates as percent (×100), volatility as annualized percent (×100).
-- **Python**: stdlib + `duckdb` + `jinja2` only. No pandas/numpy. Python 3.9+. Install: `pip install -r requirements.txt`.
+- **Python**: Python 3.9+ with `duckdb`, `jinja2`, `numpy`, `requests`; `pytest` is the test runner. Install: `pip install -r requirements.txt`.
+- **Snapshot paths**: normal raw snapshots use `data/raw/asof=YYYY-MM-DD/`; the weekly backtest artifact retains `data/raw/asof=YYYYMMDD/backtest_weekly.json`.
+- **Publication gate**: `quote_audit.json` and `validate_snapshot.py --strict --codes ...` must pass before HTML is rendered or pushed.
 - **BS pricing** uses risk-free rate 2.5% (not YTM). Writes BS fields back into dataset.json in-place.
 - **Backtest** uses multiplicative compounding with configurable slippage (10bps one-way) and commission (2bps total, split buy/sell).
 - **`init_schema()`** runs once per session on first `connect()` call, not per script invocation.
@@ -295,5 +261,6 @@ Test files: `test_bs_pricing.py` (BS model + Greeks), `test_strategy_score.py` (
 - iFinD `ths_concept_*` fields all return ERR — no structured concept/sector data available.
 - Bonds with `ths_bond_balance_cbond = 0` on as-of date are delisted (forced redemption).
 - New listings with <20 trading days will have insufficient volatility samples; `compute_volatility.py` outputs `n_samples` column.
+- A missing close for even one code in the fetched expected list is a hard failure; inspect `quote_audit.json` rather than relying on an aggregate coverage percentage.
 - Anaconda Python has SSL handshake failures with iFinD; use system Python.
 - BS pricing skips bonds without `pure_bond_value` from iFinD — the fallback `K*exp(-rT)` ignores coupons.

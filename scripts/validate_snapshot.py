@@ -59,7 +59,16 @@ def _load_dataset(path):
         return json.load(f)
 
 
-def validate(trade_date, dataset_path="", strict=False):
+def _load_codes(path):
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        return list(dict.fromkeys(
+            line.strip().upper() for line in f if line.strip()
+        ))
+
+
+def validate(trade_date, dataset_path="", strict=False, codes_path=""):
     con = connect()
     failures = []
     warnings = []
@@ -69,6 +78,9 @@ def validate(trade_date, dataset_path="", strict=False):
         con, "valuation_daily", trade_date, VALUATION_CRITICAL
     )
     _, val_warn_nulls = _count_nulls(con, "valuation_daily", trade_date, VALUATION_WARN)
+    quote_rows = con.execute(
+        "SELECT code, price FROM valuation_daily WHERE trade_date = ?", [trade_date]
+    ).fetchall()
 
     vol_total = con.execute(
         "SELECT count(*) FROM vol_daily WHERE trade_date = ?", [trade_date]
@@ -107,6 +119,22 @@ def validate(trade_date, dataset_path="", strict=False):
     ).fetchall()
     con.close()
 
+    expected_codes = _load_codes(codes_path)
+    if expected_codes:
+        expected_set = set(expected_codes)
+        quoted_codes = {
+            str(code).strip().upper()
+            for code, price in quote_rows
+            if price is not None
+        }
+        missing_quote_codes = [
+            code for code in expected_codes if code not in quoted_codes
+        ]
+        unexpected_quote_codes = sorted(quoted_codes - expected_set)
+    else:
+        missing_quote_codes = []
+        unexpected_quote_codes = []
+
     print(f"[validate] trade_date={trade_date}")
     print(f"  universe: {universe_total}")
     print(f"  valuation_daily: {val_total}")
@@ -115,6 +143,14 @@ def validate(trade_date, dataset_path="", strict=False):
     print(f"  themes bad business_rewrite: {theme_bad_business}")
     print(f"  themes empty business_rewrite: {theme_empty_business}")
     print(f"  strategy_picks: {strategy_total} {strategy_groups}")
+    if expected_codes:
+        print(
+            f"  quote coverage: {len(quoted_codes)}/{len(expected_codes)} "
+            f"missing={len(missing_quote_codes)} "
+            f"unexpected={len(unexpected_quote_codes)}"
+        )
+        if missing_quote_codes:
+            print("  missing quote codes: " + ", ".join(missing_quote_codes))
 
     if universe_total < 250:
         failures.append(f"universe too small: {universe_total}")
@@ -131,6 +167,14 @@ def validate(trade_date, dataset_path="", strict=False):
         )
     if strategy_total == 0:
         warnings.append("strategy_picks empty")
+    if expected_codes and missing_quote_codes:
+        failures.append(
+            f"quote coverage incomplete: {len(missing_quote_codes)}/{len(expected_codes)} missing"
+        )
+    if expected_codes and unexpected_quote_codes:
+        failures.append(
+            f"valuation contains {len(unexpected_quote_codes)} codes outside expected list"
+        )
 
     for col, n in val_critical_nulls.items():
         rate = _pct(n, val_total)
@@ -198,9 +242,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trade-date", required=True)
     ap.add_argument("--dataset", default="")
+    ap.add_argument("--codes", default="", help="expected as-of cbond_codes.txt")
     ap.add_argument("--strict", action="store_true", help="Treat warnings as failures")
     args = ap.parse_args()
-    raise SystemExit(validate(args.trade_date, args.dataset, strict=args.strict))
+    raise SystemExit(validate(
+        args.trade_date, args.dataset, strict=args.strict, codes_path=args.codes
+    ))
 
 
 if __name__ == "__main__":

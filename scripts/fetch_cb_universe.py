@@ -37,7 +37,10 @@ FIELDS = (
     ])
 )
 
-VALID_CB_RE = re.compile(r"^(11[0138]\d{3}\.(SH|SZ)|12[378]\d{3}\.(SH|SZ))$")
+# Public exchange CB codes: SH 110/111/113/118, SZ 123/127/128.
+# Keep the exchange suffix paired with its prefix; accepting 110xxx.SZ (or
+# 123xxx.SH) would create a false code in both the universe and quote audit.
+VALID_CB_RE = re.compile(r"^(?:11[0138]\d{3}\.SH|12[378]\d{3}\.SZ)$")
 PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
 
 
@@ -177,7 +180,23 @@ def fetch_universe(date_ymd):
     excluded = before - len(bonds)
     if excluded:
         print(f"[filter] excluded {excluded} 定向转债 by name pattern")
-    return _recover_trading_bonds(bonds, date_ymd)
+    # Some p05479 snapshots retain already-matured bonds despite the normal
+    # trading-state condition. They cannot have a close on the as-of date and
+    # would make the exact quote audit impossible, so remove them explicitly.
+    before = len(bonds)
+    bonds = [
+        b for b in bonds
+        if not _date_norm(b.get("maturity", ""))
+        or _date_norm(b.get("maturity", "")) >= date_ymd
+    ]
+    excluded = before - len(bonds)
+    if excluded:
+        print(f"[filter] excluded {excluded} matured bonds before {date_ymd}")
+    # p05479 is the authoritative as-of universe.  Do not silently add codes
+    # from the persistent local DB here: the subsequent quote audit must
+    # compare returned quotes against exactly this fetched list.  The legacy
+    # recovery path remains available explicitly via --recover-existing.
+    return bonds
 
 
 def _delete_universe_orphans(con, active_codes, min_active_ratio=0.90):
@@ -285,10 +304,33 @@ def main():
         action="store_true",
         help="Reuse --out-json and recover omitted bonds by target-date close without calling p05479",
     )
+    ap.add_argument(
+        "--reuse-existing",
+        action="store_true",
+        help="Reuse --out-json locally, apply current filters, and do not call iFinD",
+    )
     args = ap.parse_args()
 
     date_ymd = args.date.replace("-", "")
-    if args.recover_existing:
+    if args.recover_existing and args.reuse_existing:
+        raise RuntimeError("--recover-existing and --reuse-existing are mutually exclusive")
+    if args.reuse_existing:
+        if not args.out_json or not os.path.exists(args.out_json):
+            raise RuntimeError("--reuse-existing requires an existing --out-json file")
+        with open(args.out_json, encoding="utf-8") as f:
+            bonds = json.load(f).get("items", [])
+        before = len(bonds)
+        bonds = [
+            b for b in bonds
+            if VALID_CB_RE.match(b.get("code", ""))
+            and not PRIVATE_CB_RE.search(b.get("name", ""))
+            and (
+                not _date_norm(b.get("maturity", ""))
+                or _date_norm(b.get("maturity", "")) >= date_ymd
+            )
+        ]
+        print(f"[reuse] local universe {before} → {len(bonds)} bonds after as-of filters")
+    elif args.recover_existing:
         if not args.out_json or not os.path.exists(args.out_json):
             raise RuntimeError("--recover-existing requires an existing --out-json file")
         with open(args.out_json, encoding="utf-8") as f:
@@ -297,6 +339,10 @@ def main():
             b for b in bonds
             if VALID_CB_RE.match(b.get("code", ""))
             and not PRIVATE_CB_RE.search(b.get("name", ""))
+            and (
+                not _date_norm(b.get("maturity", ""))
+                or _date_norm(b.get("maturity", "")) >= date_ymd
+            )
         ]
         bonds = _recover_trading_bonds(bonds, date_ymd)
         print(f"[recover] reused existing universe with {len(bonds)} bonds")

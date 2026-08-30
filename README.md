@@ -14,15 +14,15 @@
 
 ## 项目简介
 
-覆盖全市场 **~335 只** 存续可转债的每日全景扫描系统。
+覆盖全市场 **300+ 只** 存续公开发行可转债的每日全景扫描系统；每日实际数量以当日 iFinD `p05479` 券种快照及项目过滤规则为准。
 
 核心能力：
 
-- **数据采集** -- 通过 iFinD 量化 API 批量获取行情、估值、条款、正股基本面等 30+ 字段
+- **数据采集** -- 通过 iFinD 量化 API 批量获取行情、估值、条款、正股基本面等 30+ 字段，并对券种列表逐代码核对收盘行情
 - **量化定价** -- Black-Scholes 期权定价模型，输出理论价值、相对价值及四项希腊字母
 - **多策略选券** -- 经典双低、分域双低（偏股/平衡/偏债）、低估策略三套体系
 - **题材分类** -- 基于正股主营业务文本的确定性关键词规则引擎，覆盖 ~85 个板块标签
-- **回测引擎** -- 周度再平衡回测，支持 T+1 入场、交易成本、乘法复利
+- **回测引擎** -- 日度/周度再平衡回测，支持 T+1 入场、交易成本、乘法复利；月度调仓尚未实现
 - **交互报告** -- 暗色/亮色主题切换的单文件 HTML 仪表盘（原生 SVG 回测曲线、排序筛选、CSV 导出）
 
 最终产物为一份 **自包含的 HTML 文件**，可直接浏览器打开或通过 GitHub Pages 发布。
@@ -41,7 +41,7 @@
           |               |               |
           +-------+-------+-------+-------+
                   |               |
-             DuckDB 7表        raw CSV/JSON
+             DuckDB 8表        raw CSV/JSON
           (data/cbond.duckdb)  (data/raw/asof=YYYY-MM-DD/)
                   |
        +----------+----------+
@@ -61,7 +61,7 @@
          (交互式仪表盘报告)
 ```
 
-**数据流向**：iFinD API --> raw 文件 + DuckDB 双写 --> SQL JOIN 组装 --> BS 定价 --> 策略评分 --> 题材分类 --> Markdown --> HTML
+**数据流向**：iFinD API --> 券种列表与收盘行情审计 --> raw 文件 + DuckDB 双写 --> SQL JOIN 组装 --> BS 定价 --> 策略评分 --> 题材分类 --> Markdown --> 严格校验 --> HTML --> GitHub Pages
 
 ---
 
@@ -88,15 +88,15 @@ pip install -r requirements.txt
 ### 首次初始化
 
 ```bash
-# 1. 初始化 DuckDB 数据库（创建 7 张表 + 索引）
-python scripts/init_db.py
+# 1. 初始化 DuckDB 数据库（创建 8 张表 + 索引）
+python3.12 scripts/init_db.py
 
 # 2. 拉取全市场可转债列表
-python scripts/fetch_cb_universe.py --date 20260424
+python3.12 scripts/fetch_cb_universe.py --date 2026-04-24
 
 # 3. 拉取正股公司简介（用于题材分类）
-python scripts/fetch_underlying_profile.py \
-    --universe data/raw/asof=20260424/cbond_universe.json
+python3.12 scripts/fetch_underlying_profile.py \
+    --universe data/raw/asof=2026-04-24/cbond_universe.json
 ```
 
 ### iFinD Token 配置
@@ -132,65 +132,29 @@ python scripts/fetch_cb_universe.py --date YYYY-MM-DD \
 
 ## 每日刷新流程
 
-每日管线在行情步骤前检查主营业务月度缓存，然后运行 8 个日频步骤，总耗时约 5-8 分钟：
+实际执行入口不是 Markdown，而是脚本编排器 `scripts/daily_refresh.py`。本地启动更新时按 `cbond-monitor` skill 的“预检—执行—验收—发布”框架运行。正常刷新会先检查目标日期是否已有完整本地券种池：有则直接复用，没有才调用 iFinD 获取；随后对该列表中的每一只转债核对收盘行情，发现缺失代码时直接阻止发布。总耗时约 5-8 分钟。
 
 ```bash
-ASOF=2026-04-24
-
-# Step 1  估值快照 -- 价格/溢价率/评级/余额/条款/PE/PB/市值等 (~2min)
-python scripts/fetch_valuation.py \
-    --codes    data/raw/asof=20260424/cbond_codes.txt \
-    --universe data/raw/asof=20260424/cbond_universe.json \
-    --date     $ASOF \
-    --out      data/raw/asof=$ASOF/valuation.csv
-
-# Step 2  正股20日年化波动率 (~1.5min)
-python scripts/compute_volatility.py \
-    --universe data/raw/asof=20260424/cbond_universe.json \
-    --asof     $ASOF \
-    --lookback-days 45 \
-    --out      data/raw/asof=$ASOF/vol_20d.csv
-
-# Step 3  组装全字段数据集 (DuckDB SQL JOIN, <1s)
-python scripts/assemble_dataset.py \
-    --trade-date $ASOF \
-    --out        data/dataset.json
-
-# Step 4  BS定价 + 希腊字母 (纯数学计算, <1s)
-python scripts/bs_pricing.py \
-    --dataset    data/dataset.json \
-    --trade-date $ASOF
-
-# Step 5  策略评分 (<1s)
-python scripts/strategy_score.py \
-    --dataset    data/dataset.json \
-    --trade-date $ASOF \
-    --out        data/strategies.json
-
-# Step 6  题材分类 (<1s)
-python scripts/generate_themes_direct.py \
-    --dataset    data/dataset.json \
-    --out        data/themes.json \
-    --trade-date $ASOF
-
-# Step 7  生成结构化 Markdown (<1s)
-python scripts/build_overview_md.py \
-    --dataset    data/dataset.json \
-    --trade-date $ASOF \
-    --out        data/overview.md \
-    --title-date $ASOF
-
-# Step 8  渲染交互式 HTML 报告 (<1s)
-python scripts/render_html.py \
-    --in         data/overview.md \
-    --out        output/cbond_scanner.html \
-    --title      "可转债全景扫描 $ASOF" \
-    --trade-date $ASOF \
-    --backtest   data/raw/asof=$ASOF/backtest_weekly.json
+cd /Users/apple/cbond_monitor
+ASOF=YYYY-MM-DD
+caffeinate -i /usr/local/bin/python3.12 scripts/daily_refresh.py \
+  --trade-date "$ASOF"
 ```
 
-> **Tips**：Steps 3-8 均为纯本地计算，无 API 调用，可在几秒内完成。
-> 非交易日运行会因为没有新数据而输出与上一交易日相同的结果，这是正常的。
+完整顺序为：检查目标日期是否已有完整本地券种池（有则复用，否则调用 `fetch_cb_universe`）→ 增量复用同日已有估值、仅补缺失/空值并逐代码审计收盘行情 → `refresh_data` → `refresh_underlying_profile` → 增量复用同日波动率、仅补缺失正股 → `assemble_dataset` → `bs_pricing` → `strategy_score` → 主营业务缓存/题材分类 → `build_overview_md` → `backtest_weekly` → `validate_snapshot --strict` → `render_html`/`index.html`。只有验收通过后，`auto_daily.sh` 才会 commit/push；GitHub Actions 只打包和部署本地预渲染的 HTML，不会从 Markdown 重新计算回测。
+
+### 刷新验收标准
+
+每次运行都以 `data/raw/asof=YYYY-MM-DD/cbond_codes.txt` 作为当日准确预期列表，并检查：
+
+- `quote_audit.json` 的预期数量与非空收盘价数量一致，缺失代码、空收盘价、批次错误均为 0；
+- `validate_snapshot.py --strict --codes ...` 通过，并完成 DuckDB 中当日价格覆盖检查；
+- `reports/YYYY-MM-DD/cbond_overview.md`、`cbond_overview.html`、`index.html` 存在；
+- 回测未被意外跳过且回测 JSON 存在，或明确记录使用了 `--skip-backtest`；
+- `etl_runs` 没有失败的必需步骤；
+- 以上条件未满足时，不得将本地报告发布到 GitHub。
+
+默认流程会复用目标日期本地已有且通过文件/代码一致性检查的券种快照，不再重复调用 iFinD 获取券池。`--refresh-universe` 用于显式强制重新获取券种列表；`--skip-fetch` 用于没有目标日期快照时的离线/本地重建，会复用不晚于目标日期的最近完整快照，并在日志中记录快照日期。iFinD 请求会先检查 Clash Verge TUN：TUN 开启时强制直连，未开启时才使用 HTTP(S)/ALL_PROXY 环境变量；可用 `IFIND_NETWORK_MODE=direct|proxy` 手工覆盖。
 
 ---
 
@@ -198,7 +162,7 @@ python scripts/render_html.py \
 
 ### 1. 经典双低 (Top 30)
 
-从全市场中筛选 **PE > 0** 且 **波动率 > Q1（25分位）** 的转债，按以下公式排名：
+这是报告截面中的经典双低策略：从全市场中筛选 **PE > 0** 且 **波动率 >= Q1（25分位）** 的转债，按以下公式排名。注意，周度回测使用独立的候选池规则，已取消 PE 和价格硬筛选，详见下文。
 
 ```
 双低得分 = 1.5 x rank(转股溢价率) + rank(价格)
@@ -263,7 +227,7 @@ python scripts/render_html.py \
 
 ## 回测引擎
 
-`backtest_weekly.py` 实现周度再平衡策略回测，采用 Portfolio 类逐只持仓追踪。
+`backtest_weekly.py` 实现日度/周度再平衡策略回测，默认周度，采用 Portfolio 类逐只持仓追踪。当前不支持月度调仓。
 
 ### 回测流程
 
@@ -277,16 +241,17 @@ T日收盘后 --> 按当日数据选券 --> T+1日收盘价买入
 | 过滤条件 | 说明 |
 |:---|:---|
 | 余额 >= 2 亿 | 排除流动性不足的小规模转债 |
-| 价格 <= 150 元 | 排除过高价格的投机性品种 |
-| PE > 0 | 排除亏损公司转债（低估策略除外） |
-| 波动率 > Q1 | 排除波动率过低的品种 |
+| 排除 ST/*ST | 根据调仓日正股名称，排除 ST 和 *ST 正股对应的转债 |
+| 不设价格上限 | 高价转债不再因价格超过 150 元而被硬性排除 |
+| 不筛 PE | PE 保留用于分析，但不作为周度回测候选池过滤条件 |
+| 波动率 >= Q1 | 在当期整体候选池上计算 25 分位阈值，再保留高波动一半附近的标的 |
 | 最少持仓 >= 5 | 可选券不足 5 只时该策略当期 N/A |
 
 ### 关键参数
 
 | 参数 | 默认值 | 说明 |
 |:---|:---|:---|
-| 调仓周期 | 5 个交易日 | `--holding-days 5` |
+| 调仓周期 | 默认 5 个交易日 | `--holding-days 5`；可用 `--rebalance daily/weekly` |
 | 持仓数量 | Top 10 | `--top 10` |
 | 滑点 | 10 bps (单边) | `--slippage-bps 10` |
 | 佣金 | 2 bps (往返) | `--commission-bps 2` |
@@ -333,6 +298,11 @@ python scripts/backtest_weekly.py \
 python scripts/backtest_weekly.py \
     --start-date 2025-04-24 --end-date 2026-04-24 \
     --top 20 --holding-days 10 --slippage-bps 5
+
+# 日度调仓；月度调仓目前尚未实现
+python scripts/backtest_weekly.py \
+    --start-date 2025-04-24 --end-date 2026-04-24 \
+    --rebalance daily
 ```
 
 ---
@@ -379,18 +349,19 @@ python scripts/backtest_weekly.py \
 
 ## 数据库设计
 
-DuckDB 单文件数据库 (`data/cbond.duckdb`)，包含 **7 张表 + 4 个二级索引**。
+DuckDB 单文件数据库 (`data/cbond.duckdb`)，包含 **8 张表 + 4 个二级索引**。
 
 ### 表结构概览
 
 | 表名 | 主键 | 记录数级别 | 说明 |
 |:---|:---|:---|:---|
-| `universe` | `code` | ~335 | 转债静态信息（代码/名称/正股/上市日/到期日） |
-| `valuation_daily` | `(trade_date, code)` | ~335/天 | 日度估值全字段（价格/溢价率/条款/PE/PB/BS定价等 30+ 列） |
+| `universe` | `code` | 300+ | 转债静态信息（代码/名称/正股/上市日/到期日） |
+| `valuation_daily` | `(trade_date, code)` | 300+/天 | 日度估值全字段（价格/溢价率/条款/PE/PB/BS定价等 30+ 列） |
 | `vol_daily` | `(trade_date, ucode)` | ~300/天 | 正股 20 日年化波动率 |
 | `underlying_profile` | `ucode` | ~300 | 正股公司简介与主营业务 |
+| `underlying_business` | `ucode` | ~300 | 结构化主营业务、产品、应用、客户与证据的 LLM 缓存 |
 | `strategy_picks` | `(trade_date, code, strategy)` | ~70/天 | 策略选券结果 |
-| `themes` | `(trade_date, code)` | ~335/天 | 题材分类与业务描述 |
+| `themes` | `(trade_date, code)` | 300+/天 | 题材分类与业务描述 |
 | `etl_runs` | `run_id` | 累积 | ETL 运行日志 |
 
 ### 数据双写机制
@@ -406,7 +377,7 @@ DuckDB 单文件数据库 (`data/cbond.duckdb`)，包含 **7 张表 + 4 个二�
 | 脚本 | 功能 | API 调用 | 耗时 |
 |:---|:---|:---|:---|
 | `fetch_cb_universe.py` | 拉取全市场可转债列表 + 申万行业 | `data_pool` | ~30s |
-| `fetch_valuation.py` | 批量抓取行情/估值/条款/基本面 30+ 字段 | `basic_data` + `realtime` | ~2min |
+| `fetch_valuation.py` | 批量抓取行情/估值/条款/基本面 30+ 字段，并逐代码审计收盘价 | `basic_data` + `history(close, changeRatio)` | ~2min |
 | `compute_volatility.py` | 正股 20 日年化对数收益率波动率 | `history` | ~1.5min |
 | `fetch_underlying_profile.py` | 正股公司简介文本 | `basic_data` | ~1min |
 | `refresh_data.py` | 数据新鲜度检测 + 重新拉取过期字段 | `basic_data` | ~2min |
@@ -415,10 +386,10 @@ DuckDB 单文件数据库 (`data/cbond.duckdb`)，包含 **7 张表 + 4 个二�
 
 | 脚本 | 功能 | 输入 | 输出 |
 |:---|:---|:---|:---|
-| `assemble_dataset.py` | DuckDB SQL JOIN 组装全字段数据集 | 7 表联查 | `dataset.json` |
+| `assemble_dataset.py` | DuckDB SQL JOIN 组装全字段数据集 | 多表联查 | `data/raw/asof=YYYY-MM-DD/dataset.json` |
 | `bs_pricing.py` | BS 期权定价 + 希腊字母 | `dataset.json` | DB 回写 + JSON 回写 |
-| `strategy_score.py` | 双低/分域双低/低估策略评分 | `dataset.json` | DB 写入 + `strategies.json` |
-| `generate_themes_direct.py` | 关键词规则题材分类 | `dataset.json` | DB 写入 + `themes.json` |
+| `strategy_score.py` | 双低/分域双低/低估策略评分 | `dataset.json` | DB 写入 + `strategy_picks.jsonl` |
+| `generate_themes_direct.py` | 关键词规则题材分类 | `dataset.json` | DB 写入 + `themes.jsonl` |
 
 ### 报告生成
 
@@ -440,8 +411,10 @@ DuckDB 单文件数据库 (`data/cbond.duckdb`)，包含 **7 张表 + 4 个二�
 | `init_db.py` | 执行 `schema.sql` 建表 |
 | `backfill.py` | 从 raw 目录回填历史数据到 DB |
 | `backfill_bs_delta.py` | 批量计算并回填历史 BS Delta 到 DB |
-| `validate_data.py` | 数据质量校验（universe 规模、字段完整度、值域范围） |
-| `backtest_weekly.py` | 周度再平衡回测引擎（Portfolio 类 + 风险指标） |
+| `validate_data.py` | 旧版数据质量校验；当前日快照使用 `validate_snapshot.py` |
+| `validate_snapshot.py` | 当日快照校验、精确券种-收盘价覆盖检查与严格发布门禁 |
+| `daily_refresh.py` | 一键串行执行完整刷新流程并写入 `etl_runs` |
+| `backtest_weekly.py` | 日度/周度再平衡回测引擎（Portfolio 类 + 风险指标；月度尚未实现） |
 
 ---
 
@@ -468,8 +441,8 @@ china-cbond/
   data/                               # (gitignore) 数据库 + 原始快照
     cbond.duckdb
     raw/asof=YYYY-MM-DD/
-  output/                             # (gitignore) 生成的 HTML 报告
-  tests/                              # 单元测试 (42 tests)
+  reports/YYYY-MM-DD/                 # 提交到 GitHub Pages 的 Markdown/HTML 报告
+  tests/                              # pytest 单元测试（数量以 pytest -q 实际结果为准）
   theme_vocabulary.md                 # 题材标签词表 (~85个)
   requirements.txt                    # Python 依赖
   .github/workflows/                  # GitHub Pages 自动部署
@@ -484,15 +457,25 @@ china-cbond/
 | iFinD 概念字段 | `ths_concept_*` 全部返回 ERR，无法获取结构化板块数据，题材分类依赖正股简介文本 |
 | 退市判定 | 余额为 0 的券视为已退市（强制赎回），从数据集中排除 |
 | 波动率样本 | 新上市不足 20 个交易日的券波动率样本不足，`vol_daily.n_samples` 可供判断 |
+| 行情完整性 | 当日预期券种来自 `p05479` 过滤后的 `cbond_codes.txt`；任意一只转债缺失非空收盘价都会触发硬失败，详情见 `quote_audit.json` |
 | SSL 兼容 | Anaconda Python 与 iFinD 存在 SSL 握手问题，建议使用系统 Python |
 | BS 模型局限 | 未包含赎回条款和下修条款，偏股型转债理论价值偏高 |
-| 回测数据依赖 | 回测需要历史 PE/vol 数据，iFinD 历史 API 部分字段返回 0，已通过正股 `history()` 接口补全 |
+| 回测数据依赖 | 回测需要历史价格、转股溢价率、余额和波动率；PE 保留为信息字段，但不作为当前周度回测筛选条件 |
+| 发布机制 | HTML 在本地生成并写入 `reports/YYYY-MM-DD/`；GitHub Actions 只打包部署，不从 Markdown 重建回测曲线 |
 
 ---
 
 ## 更新日志
 
-### 2026-04-27 (v2)
+### 2026-08-30（当前流程）
+
+- 将 `cbond-monitor` skill 设为本地刷新和验收的统一框架。
+- 以当日 iFinD `p05479` 过滤后的 `cbond_codes.txt` 作为准确券种集合，新增逐代码收盘行情审计 `quote_audit.json`。
+- 严格校验前置到 HTML 渲染和 GitHub 发布之前；缺失行情时不覆盖有效快照、不生成可发布页面。
+- 周度回测取消价格 ≤150 元和 PE>0 硬筛选，保留余额 >=2 亿元、波动率 >=Q1，并排除 ST/*ST 正股。
+- 增加 `underlying_business` 结构化主营业务缓存，并统一报告输出到 `reports/YYYY-MM-DD/`。
+
+### 2026-04-27 (v2，历史版本；当前规则以“回测引擎”章节为准)
 
 **回测引擎重写**
 - 新增 `Portfolio` 类：逐只持仓追踪，正确的换手感知交易成本模型（修复旧版 exit cost 权重错误）
@@ -504,7 +487,7 @@ china-cbond/
 - `main()` 从 968 行单体函数拆分为 8 个独立函数
 - 新增 `backfill_bs_delta.py` 历史 Delta 回填脚本
 
-### 2026-04-27
+### 2026-04-27（历史版本；当前字段与流程以正文为准）
 
 **UI**
 - 散点图改为等大圆点（去掉余额气泡大小），修复"未分域"显示问题

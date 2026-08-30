@@ -1,25 +1,37 @@
 """Thin wrapper around iFinD HTTP quant endpoints.
 
-Uses Python requests with environment proxies disabled. The macOS system curl
-currently fails the iFinD TLS handshake through both proxy and direct paths.
+Requests select a route through ``_network.py``: Clash TUN takes precedence
+and forces direct requests, while a non-TUN process respects its proxy
+environment. ``IFIND_NETWORK_MODE=direct|proxy`` can override auto-detection.
 """
 import time
 
 import requests
 
 from _auth import get_access_token
+from _network import configure_session, route_description
 
 BASE = "https://quantapi.51ifind.com/api/v1"
 
 
+def _configure_session(session):
+    return configure_session(session)
+
+
+_ROUTE_REPORTED = False
+
+
 def _post(path, body, retries=3, timeout=60):
+    global _ROUTE_REPORTED
     url = f"{BASE}/{path}"
     token = get_access_token()
+    if not _ROUTE_REPORTED:
+        print(f"[network] iFinD route={route_description()}")
+        _ROUTE_REPORTED = True
     last_err = None
     for i in range(retries):
         try:
-            session = requests.Session()
-            session.trust_env = False
+            session = _configure_session(requests.Session())
             response = session.post(
                 url,
                 headers={"Content-Type": "application/json", "access_token": token},

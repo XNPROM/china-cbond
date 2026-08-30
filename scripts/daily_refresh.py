@@ -1,13 +1,19 @@
 """Run the daily convertible-bond refresh pipeline.
 
-Default path fetches fresh iFinD data. For local rebuilds, skip network-heavy
-steps and rebuild downstream artifacts from existing DB/raw files.
+The default path reuses a complete local universe snapshot for the requested
+date when one already exists. If it does not exist, it fetches the as-of
+convertible-bond universe from iFinD data_pool. Use --refresh-universe to force
+a new list fetch, or --skip-fetch to reuse the newest older local snapshot for
+an intentional offline/local rebuild.
 
 Examples:
   python3.12 scripts/daily_refresh.py --trade-date 2026-04-24
+  python3.12 scripts/daily_refresh.py --trade-date 2026-04-24 --skip-fetch
   python3.12 scripts/daily_refresh.py --trade-date 2026-04-23 --skip-fetch --skip-valuation --skip-vol
 """
 import argparse
+import glob
+import json
 import os
 import subprocess
 import sys
@@ -128,26 +134,75 @@ def _ensure_themes(trade_date):
         con.close()
 
 
-def _latest_codes_file(cwd, trade_date):
-    today = os.path.join(cwd, "data", "raw", f"asof={trade_date}", "cbond_codes.txt")
-    if os.path.exists(today):
-        return today
-    fallback = os.path.join(cwd, "data", "raw", "asof=2026-04-20", "cbond_codes.txt")
-    return fallback
+def _snapshot_paths(cwd, snapshot_date):
+    raw_dir = os.path.join(cwd, "data", "raw", f"asof={snapshot_date}")
+    return (
+        os.path.join(raw_dir, "cbond_codes.txt"),
+        os.path.join(raw_dir, "cbond_universe.json"),
+    )
 
 
-def _latest_universe_file(cwd, trade_date):
-    today = os.path.join(cwd, "data", "raw", f"asof={trade_date}", "cbond_universe.json")
-    if os.path.exists(today):
-        return today
-    fallback = os.path.join(cwd, "data", "raw", "asof=2026-04-20", "cbond_universe.json")
-    return fallback
+def _is_complete_universe_snapshot(cwd, snapshot_date):
+    """Check that both local universe files are non-empty and consistent."""
+    codes_path, universe_path = _snapshot_paths(cwd, snapshot_date)
+    if not os.path.isfile(codes_path) or not os.path.isfile(universe_path):
+        return False
+    try:
+        with open(codes_path, encoding="utf-8") as f:
+            codes = [line.strip().upper() for line in f if line.strip()]
+        with open(universe_path, encoding="utf-8") as f:
+            payload = json.load(f)
+        items = payload.get("items") if isinstance(payload, dict) else None
+        universe_codes = [
+            str(item.get("code", "")).strip().upper()
+            for item in items or []
+            if isinstance(item, dict) and item.get("code")
+        ]
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(codes) and bool(universe_codes) and set(codes) == set(universe_codes)
+
+
+def _universe_snapshot_for_date(cwd, snapshot_date):
+    if not _is_complete_universe_snapshot(cwd, snapshot_date):
+        return None
+    codes, universe = _snapshot_paths(cwd, snapshot_date)
+    return snapshot_date, codes, universe
+
+
+def _latest_universe_snapshot(cwd, trade_date):
+    """Return the newest complete universe snapshot on or before trade_date."""
+    candidates = []
+    for path in glob.glob(os.path.join(cwd, "data", "raw", "asof=*")):
+        name = os.path.basename(path)
+        if not name.startswith("asof="):
+            continue
+        snapshot_date = name[5:]
+        try:
+            if datetime.strptime(snapshot_date, "%Y-%m-%d").date() > datetime.strptime(trade_date, "%Y-%m-%d").date():
+                continue
+        except ValueError:
+            continue
+        snapshot = _universe_snapshot_for_date(cwd, snapshot_date)
+        if snapshot:
+            candidates.append(snapshot)
+    if not candidates:
+        raise FileNotFoundError(
+            f"no complete cbond universe snapshot found on or before {trade_date}; "
+            "run with --refresh-universe once to create one"
+        )
+    snapshot_date, codes, universe = max(candidates)
+    return snapshot_date, codes, universe
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trade-date", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--skip-fetch", action="store_true", help="Skip cbond universe fetch")
+    ap.add_argument("--skip-fetch", action="store_true", help="Reuse the newest local universe snapshot")
+    ap.add_argument(
+        "--refresh-universe", action="store_true",
+        help="Compatibility alias: explicitly fetch the iFinD universe",
+    )
     ap.add_argument("--skip-profile", action="store_true", help="Skip monthly underlying profile refresh")
     ap.add_argument("--skip-valuation", action="store_true", help="Skip valuation fetch and refresh")
     ap.add_argument("--skip-vol", action="store_true", help="Skip volatility fetch")
@@ -163,8 +218,20 @@ def main():
     os.makedirs(raw_dir, exist_ok=True)
     os.makedirs(report_dir, exist_ok=True)
 
-    codes = _latest_codes_file(cwd, trade_date)
-    universe = _latest_universe_file(cwd, trade_date)
+    snapshot_date = None
+    # The fetched p05479 list is the expected set for the quote completeness
+    # audit. Reuse today's complete local snapshot by default; use the newest
+    # older snapshot only for an explicit offline/local rebuild.
+    if args.refresh_universe:
+        pass
+    elif args.skip_fetch:
+        snapshot_date, codes, universe = _latest_universe_snapshot(cwd, trade_date)
+        print(f"[universe] reuse local snapshot asof={snapshot_date}")
+    else:
+        local_today = _universe_snapshot_for_date(cwd, trade_date)
+        if local_today:
+            snapshot_date, codes, universe = local_today
+            print(f"[universe] reuse today's local snapshot asof={snapshot_date}")
     dataset = os.path.join(raw_dir, "dataset.json")
     valuation = os.path.join(raw_dir, "valuation.csv")
     vol = os.path.join(raw_dir, "vol_20d.csv")
@@ -181,7 +248,7 @@ def main():
     init_schema(con)
     con.close()
 
-    if not args.skip_fetch:
+    if args.refresh_universe or (not args.skip_fetch and snapshot_date is None):
         _run_step(trade_date, "fetch_cb_universe", [
             PY, "scripts/fetch_cb_universe.py",
             "--date", trade_date,
@@ -189,8 +256,8 @@ def main():
             "--out-csv", os.path.join(raw_dir, "cbond_universe.csv"),
             "--out-codes", os.path.join(raw_dir, "cbond_codes.txt"),
         ], cwd)
-        codes = _latest_codes_file(cwd, trade_date)
-        universe = _latest_universe_file(cwd, trade_date)
+        codes = os.path.join(raw_dir, "cbond_codes.txt")
+        universe = os.path.join(raw_dir, "cbond_universe.json")
 
     if not args.skip_profile:
         _run_step(trade_date, "refresh_underlying_profile", [
@@ -208,6 +275,7 @@ def main():
             "--universe", universe,
             "--date", trade_date,
             "--out", valuation,
+            "--reuse-existing",
         ], cwd)
         _run_step(trade_date, "refresh_data", [
             PY, "scripts/refresh_data.py",
@@ -222,6 +290,7 @@ def main():
             "--asof", trade_date,
             "--lookback-days", "45",
             "--out", vol,
+            "--reuse-existing",
         ], cwd)
 
     # Assemble once before BS, update dataset in-place with BS, then continue.
@@ -273,6 +342,16 @@ def main():
             "--from-db",   # data is already in DB after valuation steps
         ], cwd, required=False)
 
+    validate_cmd = [
+        PY, "scripts/validate_snapshot.py",
+        "--trade-date", trade_date,
+        "--dataset", dataset,
+        "--codes", codes,
+    ]
+    if not args.allow_validate_warnings:
+        validate_cmd.append("--strict")
+    _run_step(trade_date, "validate_snapshot", validate_cmd, cwd)
+
     render_cmd = [
         PY, "scripts/render_html.py",
         "--in", overview_md,
@@ -291,15 +370,6 @@ def main():
     overview_index = os.path.join(report_dir, "index.html")
     shutil.copyfile(overview_html, overview_index)
     print(f"[sync] {overview_index} <- {overview_html}")
-
-    validate_cmd = [
-        PY, "scripts/validate_snapshot.py",
-        "--trade-date", trade_date,
-        "--dataset", dataset,
-    ]
-    if not args.allow_validate_warnings:
-        validate_cmd.append("--strict")
-    _run_step(trade_date, "validate_snapshot", validate_cmd, cwd)
 
     print(f"\n[done] refreshed {trade_date}")
     print(f"  dataset: {dataset}")

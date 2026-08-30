@@ -40,6 +40,10 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--batch-size", type=int, default=15,
                     help="history request batch size (keep small; server returns per-code array)")
+    ap.add_argument(
+        "--reuse-existing", action="store_true",
+        help="Reuse valid same-date volatility rows and fetch only missing underlyings",
+    )
     args = ap.parse_args()
 
     asof = datetime.strptime(args.asof, "%Y-%m-%d").date()
@@ -52,7 +56,7 @@ def main():
 
     def _consume(resp):
         for t in resp.get("tables", []):
-            code = t["thscode"]
+            code = str(t["thscode"]).strip().upper()
             tbl = t.get("table", {})
             closes = tbl.get("close") or []
             closes = [c for c in closes if isinstance(c, (int, float)) and c > 0]
@@ -60,7 +64,24 @@ def main():
             vols[code] = {"vol": vol, "n": n}
 
     vols = {}
-    for b in batched(ucodes, args.batch_size):
+    if args.reuse_existing and os.path.isfile(args.out):
+        try:
+            with open(args.out, encoding="utf-8-sig", newline="") as f:
+                for row in csv.DictReader(f):
+                    ucode = str(row.get("正股代码", "")).strip().upper()
+                    vol_pct = row.get("20日年化波动率(%)", "")
+                    if ucode in ucodes and vol_pct.strip():
+                        vol = float(vol_pct) / 100
+                        n = int(float(row.get("样本数", "0") or 0))
+                        if vol >= 0 and n >= 2:
+                            vols[ucode] = {"vol": vol, "n": n}
+        except (OSError, ValueError, TypeError, csv.Error):
+            vols = {}
+        print(f"[reuse] valid same-date volatility={len(vols)}/{len(ucodes)} from {args.out}")
+
+    request_ucodes = [u for u in ucodes if u not in vols]
+    print(f"[history] request={len(request_ucodes)} reuse={len(ucodes) - len(request_ucodes)}")
+    for b in batched(request_ucodes, args.batch_size):
         try:
             _consume(history(b, "close", start, end, {"Interval": "D", "Fill": "Omit"}))
         except Exception as e:
