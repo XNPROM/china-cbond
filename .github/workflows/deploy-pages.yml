@@ -44,8 +44,8 @@ jobs:
           mkdir -p _site
           for dir in $(ls -d reports/????-??-??/ 2>/dev/null | sort -r); do
             date=$(basename "$dir")
-            source="$dir/cbond_overview.html"
-            [ -f "$source" ] || source="$dir/index.html"
+            source="$dir/index.html"
+            [ -f "$source" ] || source="$dir/cbond_overview.html"
             [ -f "$source" ] || continue
             mkdir -p "_site/$date"
             cp "$source" "_site/$date/index.html"
