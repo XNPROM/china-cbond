@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _ifind import history, batched
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 
 
 def _annualized_vol(closes):
@@ -142,7 +142,6 @@ def main():
             "n_samples": vols[ucode].get("n", 0),
         })
     con = connect()
-    init_schema(con)
     n = db_upsert(con, "vol_daily", db_rows, ["trade_date", "ucode"])
     con.close()
     print(f"[db] vol_daily upserted {n} rows (trade_date={args.asof})")

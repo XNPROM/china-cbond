@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 
 
 THEME_RULES = [
@@ -522,7 +522,6 @@ def main():
 
     existing_meta = {}
     con = connect()
-    init_schema(con)
     biz_cache = _load_business_cache(con)
     print(f"[cache] underlying_business rows loaded: {len(biz_cache)}")
     if args.trade_date:

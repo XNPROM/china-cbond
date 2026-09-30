@@ -377,15 +377,7 @@ def persist_fundamentals_to_db(fundamentals):
 
 # ── BS formulas ──────────────────────────────────────────────────────
 
-def classify_sector(delta):
-    """Classify by BS Delta: 偏股≥0.6, 平衡0.3–0.6, 偏债<0.3. Matches strategy_score.py."""
-    if delta is None:
-        return "偏债"
-    if delta >= 0.6:
-        return "偏股"
-    if delta >= 0.3:
-        return "平衡"
-    return "偏债"
+from _snapshot_policy import classify_sector as classify_sector
 
 
 def _compute_bs_delta(price, conv_prem, vol_20d, surplus_years=None, maturity_call=None):
@@ -621,7 +613,7 @@ def compute_risk_metrics(equity_series, n_trading_days):
     cum_ret = equity_series[-1] / equity_series[0] - 1
 
     if n_trading_days > 0 and equity_series[-1] > 0:
-        ann_ret = (equity_series[-1] ** (252 / n_trading_days) - 1)
+        ann_ret = ((equity_series[-1] / equity_series[0]) ** (252 / n_trading_days) - 1)
     else:
         ann_ret = 0
 
@@ -877,10 +869,15 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
     return fundamentals
 
 
-def load_benchmark(start_ymd, end_ymd, trading_dates):
+def load_benchmark(start_ymd, end_ymd, trading_dates, allow_fetch=True):
     """Load CSI convertible bond index (000832.CSI) or fall back to equal-weight."""
-    bench_prices = {}
-    if history is not None:
+    cache = os.path.join(os.path.dirname(__file__), "..", "data", "benchmark_000832.json")
+    try:
+        with open(cache, encoding="utf-8") as handle:
+            bench_prices = json.load(handle)
+    except (OSError, ValueError):
+        bench_prices = {}
+    if allow_fetch and history is not None:
         print("[bench] fetching CSI convertible index (000832.CSI)...")
         try:
             r = history("000832.CSI", "close",
@@ -894,11 +891,15 @@ def load_benchmark(start_ymd, end_ymd, trading_dates):
                         v = _safe_float(closes, i)
                         if v and v > 0:
                             bench_prices[ymd] = v
-            print(f"  {len(bench_prices)} data points")
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache + ".tmp", "w", encoding="utf-8") as handle:
+                json.dump(bench_prices, handle)
+            os.replace(cache + ".tmp", cache)
+            print(f"  {len(bench_prices)} cached data points")
         except Exception as e:
             print(f"  [warn] benchmark fetch failed: {e}")
 
-    use_eq_weight = not bench_prices
+    use_eq_weight = not all(bench_prices.get(d, 0) > 0 for d in trading_dates)
     if use_eq_weight:
         print("[bench] CSI index unavailable, using equal-weight market return as proxy")
 
@@ -965,6 +966,8 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
     equity_history["bench"] = [1.0]
     turnover_history = {k: [] for k in STRATEGIES}
 
+    if rebalance_indices and not use_eq_weight_bench:
+        bench_base = bench_prices.get(trading_dates[rebalance_indices[0] + 1])
     for rb_idx, rb_i in enumerate(rebalance_indices):
         td_select = trading_dates[rb_i]
         td_buy = trading_dates[min(rb_i + 1, len(trading_dates) - 1)]
@@ -1024,7 +1027,7 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
                 bench_equity = bp / bench_base
         equity_history["bench"].append(bench_equity)
 
-        pt = {"date": td_sell}
+        pt = {"date": td_sell, "start_date": td_buy}
         for k in STRATEGIES:
             pt[f"cum_{k}"] = round(portfolios[k].equity - 1, 6)
         pt["cum_bench"] = round(bench_equity - 1, 6)
@@ -1052,16 +1055,20 @@ def dedup_equity(curve):
 
 
 def print_summary(args, results, equity_history, turnover_history, trading_dates,
-                  holding, strategies, labels, use_eq_weight_bench):
+                  holding, strategies, labels, use_eq_weight_bench, calendar_dates=None):
     """Print backtest summary with risk metrics."""
     results = dedup_equity(results)
     if not results:
         print("[error] No valid backtest periods (all N/A). Check data completeness.")
         return None
 
-    actual_start = results[0]["date"]
+    actual_start = results[0].get("start_date", results[0]["date"])
     actual_end = results[-1]["date"]
-    n_actual_days = len([d for d in trading_dates if actual_start <= d <= actual_end])
+    observed_days = len([d for d in trading_dates if actual_start < d <= actual_end])
+    n_actual_days = len([d for d in (calendar_dates or trading_dates) if actual_start < d <= actual_end])
+    calendar_basis = "index" if calendar_dates else "observed"
+    if observed_days < n_actual_days:
+        print(f"[warn] historical calendar gaps: {n_actual_days-observed_days} index trading dates lack bond snapshots")
 
     ALL_CURVES = strategies + ["bench"]
 
@@ -1108,6 +1115,8 @@ def print_summary(args, results, equity_history, turnover_history, trading_dates
         "actual_start": actual_start,
         "actual_end": actual_end,
         "n_actual_days": n_actual_days,
+        "observed_trading_days": observed_days,
+        "calendar_basis": calendar_basis,
         "results": results,
         "summary_data": summary_data,
     }
@@ -1124,6 +1133,8 @@ def save_output(args, summary_info, end_ymd, strategies, use_eq_weight_bench, ho
         "start_date": summary_info["actual_start"],
         "end_date": summary_info["actual_end"],
         "trading_days": summary_info["n_actual_days"],
+        "observed_trading_days": summary_info["observed_trading_days"],
+        "calendar_basis": summary_info["calendar_basis"],
         "rebalance": args.rebalance,
         "holding_days": holding,
         "n_rebalances": len(summary_info["results"]),
@@ -1159,6 +1170,7 @@ def main():
     ap.add_argument("--skip-fetch", action="store_true", help="use cached data if available")
     ap.add_argument("--from-db", action="store_true",
                     help="read ALL data from DuckDB (fast, requires pre-populated valuation_daily)")
+    ap.add_argument("--refresh-benchmark", action="store_true", help="Allow index API refresh in --from-db mode; otherwise use cache or labeled equal-weight fallback")
     ap.add_argument("--rebalance", default="weekly", choices=["daily", "weekly"])
     ap.add_argument("--holding-days", type=int, default=5, help="holding period in trading days")
     ap.add_argument("--slippage-bps", type=int, default=SLIPPAGE_BPS)
@@ -1190,7 +1202,7 @@ def main():
 
     trading_dates, prices = load_prices_and_dates(args, codes, start_ymd, end_ymd)
     if trading_dates is None:
-        return
+        raise SystemExit(1)
 
     rebalance_indices, holding = compute_rebalance_schedule(args, trading_dates, start_ymd, end_ymd)
     rebalance_ymds = set(trading_dates[i] for i in rebalance_indices)
@@ -1199,7 +1211,7 @@ def main():
         args, codes, codes_set, code_to_ucode, trading_dates,
         rebalance_ymds, prices, start_ymd, end_ymd)
 
-    bench_prices, bench_base, use_eq_weight_bench = load_benchmark(start_ymd, end_ymd, trading_dates)
+    bench_prices, bench_base, use_eq_weight_bench = load_benchmark(start_ymd, end_ymd, trading_dates, allow_fetch=not args.from_db or args.refresh_benchmark)
 
     (results, portfolios, equity_history, turnover_history,
      bench_equity, strategies, labels) = run_backtest_loop(
@@ -1208,9 +1220,10 @@ def main():
 
     summary_info = print_summary(
         args, results, equity_history, turnover_history,
-        trading_dates, holding, strategies, labels, use_eq_weight_bench)
+        trading_dates, holding, strategies, labels, use_eq_weight_bench,
+        calendar_dates=sorted(bench_prices) if not use_eq_weight_bench else None)
     if summary_info is None:
-        return
+        raise SystemExit(1)
 
     save_output(args, summary_info, end_ymd, strategies, use_eq_weight_bench, holding)
 

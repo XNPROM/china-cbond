@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 
 
 CACHE_TTL_DAYS = 7
@@ -156,7 +156,6 @@ def main():
     args = ap.parse_args()
 
     con = connect()
-    init_schema(con)
     _ensure_cache_table(con)
 
     dataset = json.load(open(args.dataset, encoding="utf-8"))

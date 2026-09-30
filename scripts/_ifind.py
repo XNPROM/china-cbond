@@ -39,7 +39,12 @@ def _post(path, body, retries=3, timeout=60):
                 timeout=timeout,
             )
             response.raise_for_status()
-            return response.json()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("iFinD returned a non-object response")
+            if str(payload.get("errorcode", 0)) != "0":
+                raise ValueError(f"iFinD error {payload.get('errorcode')}: {payload.get('errmsg', '')}")
+            return payload
         except (requests.RequestException, ValueError) as e:
             last_err = e
             if i < retries - 1:

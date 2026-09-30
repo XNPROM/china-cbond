@@ -24,7 +24,7 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 from _ifind import history, ths_dr
 
 
@@ -234,7 +234,6 @@ def _delete_universe_orphans(con, active_codes, min_active_ratio=0.90):
 
 def save_to_db(bonds, date_ymd):
     con = connect()
-    init_schema(con)
 
     try:
         con.execute("BEGIN")

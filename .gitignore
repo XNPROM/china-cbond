@@ -48,3 +48,5 @@ docs/
 __MACOSX/
 extracted/
 _temp_research/
+
+.pytest_cache/

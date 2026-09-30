@@ -32,7 +32,7 @@ For each run, the final `data/raw/asof=YYYY-MM-DD/cbond_codes.txt` is the expect
 - `quote_audit.json` shows the expected count, returned non-blank close count, missing code count of zero, blank code count of zero, and no batch errors;
 - `validate_snapshot.py --strict --codes ...` passes, including the dated DuckDB price coverage check;
 - the dated Markdown, HTML, `index.html`, and (when enabled) backtest JSON exist;
-- no failed required ETL step is present in `etl_runs`; and
+- the latest execution of every executed required ETL step is successful in `etl_runs`; and
 - the report is committed and pushed only after the checks above succeed.
 
 The audit artifact is `data/raw/asof=YYYY-MM-DD/quote_audit.json`. It is an operational trace and remains local unless explicitly added to a release artifact.
@@ -131,7 +131,7 @@ iFinD API → raw CSV/JSON (data/raw/asof=YYYY-MM-DD/)
 | `strategy_score.py` | Double-low + sector-neutral + low-RV scoring |
 | `generate_themes_direct.py` | Keyword + Shenwan theme classification |
 | `build_overview_md.py` | Markdown report from dataset + DB |
-| `render_html.py` | Interactive HTML dashboard (Jinja2 + ECharts) |
+| `render_html.py` | Interactive HTML dashboard (Jinja2 + native SVG) |
 | `render_markdown_parser.py` | Markdown parser + helpers (extracted from render_html) |
 | `backtest_weekly.py` | Daily/weekly-rebalanced backtest engine (monthly not implemented) |
 | `backfill.py` | One-shot raw data loader into DuckDB |
@@ -182,14 +182,14 @@ The dated raw snapshot uses `asof=YYYY-MM-DD`. The weekly backtest output keeps 
 - Dark/light theme toggle (persisted to localStorage)
 - KPI summary cards (total, avg price, median conv premium, median RV, undervalued count, sector split)
 - Column-level sorting (click header: asc → desc → default)
-- ECharts equity curve (tooltip + dataZoom)
+- Native SVG equity curve
 - SVG sparklines for delta and relative value trends
 - Filter: text search, theme dropdown, quick-filter buttons
 - Export CSV / copy codes
 - Sector badges, relative value color coding, call/down status badges
 - Mobile-responsive (card layout <640px)
 
-Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in `scripts/static/style.css`, JS in `scripts/static/app.js`, both inlined at render time. Bond data in `window.__CBOND_DATA__` JSON (replaces data-* attributes).
+Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in `scripts/static/style.css`, JS in `scripts/static/app.js`, both inlined at render time. Bond data in `window.__VIEW_MODEL__` JSON (replaces data-* attributes).
 
 ## Key Conventions
 
@@ -214,3 +214,14 @@ Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in
 - A missing close for even one code in the expected list is not hidden by an aggregate coverage threshold; inspect `quote_audit.json` and the validation output.
 - Anaconda Python has SSL handshake failures with iFinD; use system Python.
 - BS pricing skips bonds without `pure_bond_value` from iFinD — the fallback `K*exp(-rT)` ignores coupons.
+
+
+## Maintenance additions (2026-09-30)
+
+- `_snapshot_policy.py` owns quality limits and Delta sectors (0.6/0.3); missing Delta stays unclassified.
+- `refresh_data.py` incrementally repairs missing code/field pairs and synchronizes the same-date valuation CSV. Required-field repair and validation must never use contradictory thresholds.
+- `validate_snapshot.py --strict` requires the expected code file, dataset, complete matching quote audit, valid exact dated prices, matching theme coverage and latest successful required steps. Pass `--backtest <path>` when backtest is enabled. Previous validator/render failures do not block a new successful validation.
+- No `--allow-validate-warnings` path may render or publish. `--skip-backtest` omits the chart even if an old artifact exists.
+- `auto_daily.sh` uses `_run_locked.py` for a kernel lock and a successful-push receipt, stages only dated report files, preserves unrelated staged changes, and retries pending pushes with no new diff.
+- `--from-db` is offline for benchmark data too. Explicit `--refresh-benchmark` permits an index fetch and populates `data/benchmark_000832.json`; absent complete cache, label the benchmark as equal-weight.
+- Fresh schema must include `implied_vol`; migrations must be idempotent. `connect()` owns schema initialization. Validation uses a read-only connection.

@@ -72,12 +72,12 @@ def main():
     with open(os.path.join(SCRIPT_DIR, "static", "app.js"), encoding="utf-8") as handle:
         js = handle.read()
 
-    env = Environment(loader=FileSystemLoader(os.path.join(SCRIPT_DIR, "templates")))
+    env = Environment(loader=FileSystemLoader(os.path.join(SCRIPT_DIR, "templates")), autoescape=True)
     template = env.get_template("base.html.j2")
     html_out = template.render(
         title=args.title,
         view_model=view_model,
-        view_model_json=json.dumps(view_model, ensure_ascii=False),
+        view_model_json=json.dumps(view_model, ensure_ascii=False).replace("<", "\\u003c"),
         css=css,
         js=js,
     )

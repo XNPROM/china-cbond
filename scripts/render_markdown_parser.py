@@ -1,6 +1,8 @@
 """Markdown parser for cbond overview report + helper utilities."""
 import html
 import re
+import statistics
+from _snapshot_policy import classify_sector
 
 CATEGORY_ORDER = [
     "科技TMT",
@@ -152,6 +154,7 @@ def parse_card(lines, start_idx):
         "conv": metrics.get("转股溢价率", ""),
         "pure": metrics.get("纯债溢价率", ""),
         "vol": metrics.get("20日年化σ", ""),
+        "implied_vol": metrics.get("隐含波动率", ""),
         "pure_bond_ytm": metrics.get("纯债YTM", ""),
         "relative_value": metrics.get("相对价值", ""),
         "delta": metrics.get("Delta", ""),
@@ -247,12 +250,12 @@ def compute_kpi_metrics(report):
     return {
         "total": n,
         "avg_price": round(sum(prices) / len(prices), 1) if prices else 0,
-        "median_conv": round(sorted(convs)[len(convs) // 2], 1) if convs else 0,
-        "median_rv": round(sorted(rvs)[len(rvs) // 2], 2) if rvs else 0,
+        "median_conv": round(statistics.median(convs), 1) if convs else 0,
+        "median_rv": round(statistics.median(rvs), 2) if rvs else 0,
         "undervalued": sum(1 for v in rvs if v < 1.0),
-        "n_equity": sum(1 for d in deltas if d >= 0.7),
-        "n_balanced": sum(1 for d in deltas if 0.4 <= d < 0.7),
-        "n_debt": sum(1 for d in deltas if d < 0.4),
+        "n_equity": sum(1 for d in deltas if classify_sector(d) == "偏股"),
+        "n_balanced": sum(1 for d in deltas if classify_sector(d) == "平衡"),
+        "n_debt": sum(1 for d in deltas if classify_sector(d) == "偏债"),
     }
 
 

@@ -29,7 +29,7 @@
     { key: "cum_balanced", label: "平衡双低", color: "#a16207", width: 2 },
     { key: "cum_debt", label: "偏债双低", color: "#059669", width: 2 },
     { key: "cum_rv", label: "低估 Top10", color: "#7c3aed", width: 2 },
-    { key: "cum_bench", label: "中证转债", color: "#6b7280", width: 2, dash: "6 5" },
+    { key: "cum_bench", label: (VIEW_MODEL.backtest?.summary?.benchmark_label || "中证转债"), color: "#6b7280", width: 2, dash: "6 5" },
   ];
 
   function escapeHtml(value) {
@@ -387,6 +387,10 @@
           <div class="drawer-kv-row">
             <dt>20日年化&sigma;</dt>
             <dd>${escapeHtml(metricText(item.vol))}</dd>
+          </div>
+          <div class="drawer-kv-row">
+            <dt>隐含波动率</dt>
+            <dd>${escapeHtml(metricText(item.implied_vol))}</dd>
           </div>
           <div class="drawer-kv-row">
             <dt>相对价值</dt>

@@ -41,6 +41,7 @@ SELECT
   )) AS pure_bond_ytm,
   v.ifind_doublelow,
   v.option_value,
+  v.implied_vol,
   v.surplus_days,
   v.surplus_years,
   v.accum_conv_ratio,

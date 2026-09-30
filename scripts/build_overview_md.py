@@ -181,8 +181,6 @@ def main():
     ap.add_argument("--trade-date", required=True, help="YYYY-MM-DD, used to load themes/strategy from DB")
     ap.add_argument("--out", required=True)
     ap.add_argument("--title-date", required=True)
-    ap.add_argument("--strategy-page", default="cbond_strategy.html",
-                    help="relative link to strategy HTML page in the summary")
     args = ap.parse_args()
 
     dataset = json.load(open(args.dataset, encoding="utf-8"))
@@ -223,7 +221,7 @@ def main():
     pure_med = f"{statistics.median(pure_values):.2f}%" if pure_values else "N/A"
     lines.append(f"- 转股溢价率中位数 {conv_med}，纯债溢价率中位数 {pure_med}")
     lines.append("- 按题材分布（Top 10）：" + " / ".join(f"{name}({cnt})" for name, cnt in top_themes))
-    lines.append(f"- HTML 支持“概览 / 策略”页签切换；独立页见 [→ 今日策略推荐]({args.strategy_page})")
+    lines.append("- 策略推荐和回测结果见本页对应面板。")
     lines.append("")
     lines.append("## 题材索引")
     for theme, items in sorted(by_theme.items(), key=lambda kv: (-len(kv[1]), kv[0])):
@@ -285,7 +283,7 @@ def main():
                 f"{_fmt_num(row.get('latest'))} | {_fmt_signed_pct(row.get('day_chg'))} | "
                 f"{_fmt_pct(row.get('conv_prem'))} | {_fmt_pct(row.get('pure_prem'))} | "
                 f"{_fmt_vol(row.get('vol_20d'))} | {_fmt_pct(row.get('implied_vol'))} | "
-                f"{_fmt_rv(row.get('relative_value'))} | {_fmt_num(row.get('bs_delta'), 3)} | "
+                f"{_fmt_rv(row.get('relative_value'))} | {_fmt_num(row.get('bs_delta'), 4)} | "
                 f"{_fmt_pct(row.get('pure_bond_ytm'))} | {_fmt_num(row.get('surplus_years'), 2)} | "
                 f"{_call_status(row)} | {_down_status(row)} | "
                 f"{_fmt_num(row.get('balance'))} | {row.get('rating','')} | {_fmt_date(row.get('maturity'))} |"

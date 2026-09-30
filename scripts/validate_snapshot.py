@@ -12,27 +12,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect
+from _snapshot_policy import (VALUATION_CRITICAL, VALUATION_WARN, finite_number, null_limit)
 
 
 PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
-
-
-VALUATION_CRITICAL = [
-    "price",
-    "conv_prem_pct",
-    "pure_prem_pct",
-    "pure_bond_value",
-    "maturity_call_price",
-]
-
-VALUATION_WARN = [
-    "change_pct",
-    "implied_vol",
-    "pe_ttm",
-    "total_mv_yi",
-    "relative_value",
-    "bs_delta",
-]
 
 
 def _pct(n, d):
@@ -46,7 +29,7 @@ def _count_nulls(con, table, trade_date, cols):
     nulls = {}
     for col in cols:
         nulls[col] = con.execute(
-            f"SELECT count(*) FROM {table} WHERE trade_date = ? AND {col} IS NULL",
+            f"SELECT count(*) FROM {table} WHERE trade_date = ? AND ({col} IS NULL OR NOT isfinite({col}))",
             [trade_date],
         ).fetchone()[0]
     return total, nulls
@@ -68,8 +51,34 @@ def _load_codes(path):
         ))
 
 
-def validate(trade_date, dataset_path="", strict=False, codes_path=""):
-    con = connect()
+def _check_audit(path, trade_date, expected):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            audit = json.load(handle)
+        errors = []
+        if audit.get("trade_date") != trade_date:
+            errors.append("quote audit date mismatch")
+        for key in ("expected_codes", "returned_codes"):
+            values = audit.get(key, [])
+            if len(values) != len(expected) or set(values) != expected:
+                errors.append(f"quote audit {key} mismatch")
+        if audit.get("expected_count") != len(expected) or audit.get("returned_count") != len(expected):
+            errors.append("quote audit count mismatch")
+        for key in ("missing_codes", "blank_codes", "batch_errors"):
+            if audit.get(key) != []:
+                errors.append(f"quote audit {key} is missing or non-empty")
+        if audit.get("missing_count") != 0:
+            errors.append("quote audit missing_count is not zero")
+        return errors
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return [f"quote audit unavailable/invalid: {exc}"]
+
+
+def validate(trade_date, dataset_path="", strict=False, codes_path="", backtest_path=""):
+    raw = os.path.join(os.path.dirname(__file__), "..", "data", "raw", f"asof={trade_date}")
+    dataset_path = dataset_path or os.path.join(raw, "dataset.json")
+    codes_path = codes_path or os.path.join(raw, "cbond_codes.txt")
+    con = connect(read_only=True)
     failures = []
     warnings = []
 
@@ -117,7 +126,23 @@ def validate(trade_date, dataset_path="", strict=False, codes_path=""):
         "SELECT strategy, count(*) FROM strategy_picks WHERE trade_date = ? GROUP BY 1 ORDER BY 1",
         [trade_date],
     ).fetchall()
+    theme_codes = {r[0] for r in con.execute("SELECT code FROM themes WHERE trade_date=?", [trade_date]).fetchall()}
+    strategy_codes = {r[0] for r in con.execute("SELECT code FROM strategy_picks WHERE trade_date=?", [trade_date]).fetchall()}
+    latest_steps = con.execute("""
+        SELECT step, status FROM etl_runs WHERE trade_date=?
+        QUALIFY row_number() OVER (PARTITION BY step ORDER BY started_at DESC, run_id DESC)=1
+    """, [trade_date]).fetchall()
     con.close()
+    # Validation cannot require its own previous invocation to have succeeded.
+    # render_html is downstream; backtest is checked only when requested.
+    required_steps = {"fetch_cb_universe", "fetch_valuation", "refresh_data", "refresh_underlying_profile",
+                      "compute_volatility", "assemble_dataset", "bs_pricing", "strategy_score",
+                      "ensure_themes", "generate_themes_direct", "build_overview_md"}
+    if backtest_path:
+        required_steps.add("backtest_weekly")
+    for step, status in latest_steps:
+        if step in required_steps and status not in ("ok", "success"):
+            failures.append(f"latest required ETL step {step}: {status}")
 
     expected_codes = _load_codes(codes_path)
     if expected_codes:
@@ -125,12 +150,12 @@ def validate(trade_date, dataset_path="", strict=False, codes_path=""):
         quoted_codes = {
             str(code).strip().upper()
             for code, price in quote_rows
-            if price is not None
+            if finite_number(price) and price > 0
         }
         missing_quote_codes = [
             code for code in expected_codes if code not in quoted_codes
         ]
-        unexpected_quote_codes = sorted(quoted_codes - expected_set)
+        unexpected_quote_codes = sorted({str(code).strip().upper() for code, _ in quote_rows} - expected_set)
     else:
         missing_quote_codes = []
         unexpected_quote_codes = []
@@ -152,14 +177,16 @@ def validate(trade_date, dataset_path="", strict=False, codes_path=""):
         if missing_quote_codes:
             print("  missing quote codes: " + ", ".join(missing_quote_codes))
 
-    if universe_total < 250:
-        failures.append(f"universe too small: {universe_total}")
-    if val_total < max(250, universe_total * 0.75):
-        failures.append(f"valuation rows too small: {val_total}")
-    if vol_total < max(200, universe_total * 0.6):
-        failures.append(f"vol rows too small: {vol_total}")
-    if theme_total < max(200, val_total * 0.6):
-        failures.append(f"themes rows too small: {theme_total}")
+    if not expected_codes:
+        failures.append(f"expected code list missing or empty: {codes_path}")
+    if not val_total:
+        failures.append("valuation snapshot empty")
+    if expected_codes:
+        if theme_codes != expected_set:
+            failures.append(f"theme coverage differs from expected list: missing={len(expected_set-theme_codes)} unexpected={len(theme_codes-expected_set)}")
+        if strategy_codes - expected_set:
+            failures.append("strategy contains codes outside expected list")
+        failures.extend(_check_audit(os.path.join(os.path.dirname(dataset_path), "quote_audit.json"), trade_date, expected_set))
     if theme_empty_business > max(10, theme_total * 0.05):
         failures.append(
             f"themes business_rewrite empty too high: "
@@ -179,26 +206,41 @@ def validate(trade_date, dataset_path="", strict=False, codes_path=""):
     for col, n in val_critical_nulls.items():
         rate = _pct(n, val_total)
         print(f"  critical {col}: {n}/{val_total} null ({rate:.1%})")
-        if rate > 0.05:
+        if rate > null_limit(col):
             failures.append(f"{col} critical null rate {rate:.1%}")
 
     for col, n in val_warn_nulls.items():
         rate = _pct(n, val_total)
         print(f"  warn {col}: {n}/{val_total} null ({rate:.1%})")
-        if rate > 0.20:
+        if rate > null_limit(col):
             warnings.append(f"{col} warn null rate {rate:.1%}")
 
-    dataset = _load_dataset(dataset_path)
+    try:
+        dataset = _load_dataset(dataset_path)
+    except (OSError, ValueError) as exc:
+        failures.append(f"cannot read dataset: {exc}")
+        dataset = None
+    if dataset is None:
+        failures.append(f"dataset missing: {dataset_path}")
     if dataset is not None:
         items = dataset.get("items", [])
         dataset_codes = {x.get("code") for x in items}
         dataset_bad_business = sum(1 for code, _ in theme_bad_rows if code in dataset_codes)
         print(f"  dataset: {len(items)} items ({dataset_path})")
-        if len(items) < 250:
-            failures.append(f"dataset too small: {len(items)}")
+        if dataset.get("trade_date") != trade_date:
+            failures.append("dataset trade_date mismatch")
+        if expected_codes and dataset_codes != expected_set:
+            failures.append("dataset code set differs from expected list")
+        if len(items) != len(dataset_codes) or dataset.get("count") != len(items):
+            failures.append("dataset duplicate codes or count mismatch")
+        if any(not finite_number(x.get("latest")) or x["latest"] <= 0 for x in items):
+            failures.append("dataset has missing/invalid prices")
+        for col in ("conv_prem", "pure_prem", "pure_bond_value", "maturity_call_price"):
+            if sum(not finite_number(x.get(col)) for x in items) > len(items) * 0.05:
+                failures.append(f"dataset critical field {col} missing")
         missing_profile = sum(1 for x in items if not x.get("profile"))
-        missing_vol = sum(1 for x in items if x.get("vol_20d") is None)
-        missing_rv = sum(1 for x in items if x.get("relative_value") is None)
+        missing_vol = sum(1 for x in items if not finite_number(x.get("vol_20d")))
+        missing_rv = sum(1 for x in items if not finite_number(x.get("relative_value")))
         private_cb = sum(1 for x in items if PRIVATE_CB_RE.search(x.get("name") or ""))
         future_listed = sum(
             1 for x in items
@@ -223,6 +265,15 @@ def validate(trade_date, dataset_path="", strict=False, codes_path=""):
     elif theme_bad_business:
         failures.append(f"themes business_rewrite appears to contain fundraising purpose: {theme_bad_business}")
 
+    if backtest_path:
+        try:
+            backtest = _load_dataset(backtest_path)
+            if not backtest or not backtest.get("equity_curve"):
+                failures.append("backtest missing or empty")
+            elif str(backtest.get("end_date", "")).replace("-", "") != trade_date.replace("-", ""):
+                failures.append("backtest end_date mismatch")
+        except (OSError, ValueError) as exc:
+            failures.append(f"cannot read backtest: {exc}")
     if warnings:
         print("[warnings]")
         for item in warnings:
@@ -243,10 +294,11 @@ def main():
     ap.add_argument("--trade-date", required=True)
     ap.add_argument("--dataset", default="")
     ap.add_argument("--codes", default="", help="expected as-of cbond_codes.txt")
+    ap.add_argument("--backtest", default="", help="Required dated backtest JSON when enabled")
     ap.add_argument("--strict", action="store_true", help="Treat warnings as failures")
     args = ap.parse_args()
     raise SystemExit(validate(
-        args.trade_date, args.dataset, strict=args.strict, codes_path=args.codes
+        args.trade_date, args.dataset, strict=args.strict, codes_path=args.codes, backtest_path=args.backtest
     ))
 
 

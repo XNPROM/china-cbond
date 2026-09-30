@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _ifind import basic_data, batched
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 
 
 STOCK_FIELDS = [
@@ -94,7 +94,6 @@ def main():
     print(f"[stocks] {len(ucodes)} unique underlying codes")
 
     con = connect()
-    init_schema(con)
     existing_rows = con.execute(
         "SELECT ucode, uname, industry, main_business, updated_at FROM underlying_profile"
     ).fetchall()

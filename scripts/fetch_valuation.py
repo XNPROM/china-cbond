@@ -28,7 +28,7 @@ import argparse, csv, json, os, sys, time
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _ifind import basic_data, history, batched
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 
 
 def _f(v):
@@ -481,7 +481,7 @@ def main():
         for c in codes
     ]
     con = connect()
-    init_schema(con)
+    con.execute("BEGIN TRANSACTION")
     n = db_upsert(con, "valuation_daily", db_rows, ["trade_date", "code"])
     if codes:
         placeholders = ",".join("?" for _ in codes)
@@ -489,6 +489,7 @@ def main():
             f"DELETE FROM valuation_daily WHERE trade_date = ? AND code NOT IN ({placeholders})",
             [args.date, *codes],
         )
+    con.execute("COMMIT")
     con.close()
     print(f"[db] valuation_daily upserted {n} rows and cleaned out-of-universe rows (trade_date={args.date})")
 

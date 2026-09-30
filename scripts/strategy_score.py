@@ -3,7 +3,7 @@
 Two strategies:
 1. 双低 (vanilla): PE>0, vol>Q1, rank = 1.5*rank(conv_prem) + rank(price), top 30
 2. 双低-分域 (sector-neutral): Same filter, then classify into 3 sectors by
-   conv_prem (偏股<20%, 平衡20-50%, 偏债≥50%), rank independently within each
+   BS Delta (偏股≥0.6, 平衡0.3–0.6, 偏债<0.3), rank independently within each
    sector, pick top 10 per sector.
 
 Usage:
@@ -15,7 +15,7 @@ Usage:
 import argparse, json, os, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 
 
 def _percentile(sorted_vals, pct):
@@ -28,15 +28,7 @@ def _percentile(sorted_vals, pct):
     return sorted_vals[lo] + frac * (sorted_vals[hi] - sorted_vals[lo])
 
 
-def _classify_sector(delta):
-    """Classify by BS Delta: 偏股≥0.6, 平衡0.3–0.6, 偏债<0.3."""
-    if delta is None:
-        return "偏债"
-    if delta >= 0.6:
-        return "偏股"
-    if delta >= 0.3:
-        return "平衡"
-    return "偏债"
+from _snapshot_policy import classify_sector as _classify_sector
 
 
 def _format_delta(delta):
@@ -112,7 +104,8 @@ def main():
     sector_groups = {"偏股": [], "平衡": [], "偏债": []}
     for r in candidates:
         s = _classify_sector(r.get("bs_delta"))
-        sector_groups[s].append(r)
+        if s in sector_groups:
+            sector_groups[s].append(r)
 
     sector_picks = []
     for sector_name, group in sector_groups.items():
@@ -187,8 +180,10 @@ def main():
     con = connect()
     # Recompute is date-scoped: remove stale picks from previous runs before inserting
     # the current strategy set, otherwise changed filters leave old rows behind.
+    con.execute("BEGIN TRANSACTION")
     con.execute("DELETE FROM strategy_picks WHERE trade_date = ?", [args.trade_date])
     n = db_upsert(con, "strategy_picks", db_rows, ["trade_date", "code", "strategy"])
+    con.execute("COMMIT")
     con.close()
     print(f"[db] strategy_picks upserted {n} rows")
 

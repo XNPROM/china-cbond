@@ -10,7 +10,9 @@ Usage:
   # Force re-fetch all bond-side fields:
   python3.12 scripts/refresh_data.py --trade-date 2026-04-24 --fix --force
 """
-import argparse, os, sys, time
+import argparse, csv, json, os, sys, time
+from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, upsert as db_upsert
@@ -49,191 +51,181 @@ STATIC_FIELDS = [
 ]
 
 ALL_FIELDS = DATE_FIELDS + STATIC_FIELDS
-CRITICAL_COLS = ["price", "conv_prem_pct", "pure_bond_value", "maturity_call_price"]
+from _snapshot_policy import (VALUATION_CRITICAL, VALUATION_WARN, finite_number, null_limit)
+
+INT_COLS = {"surplus_days", "call_trigger_days"}
+STR_COLS = {"rating", "maturity_date", "no_call_start", "no_call_end", "has_down_revision",
+            "ths_industry", "redemp_stop_date"}
+CSV_COLS = dict(zip(
+    [f[0] for f in ALL_FIELDS],
+    ["转股溢价率(%)", "纯债溢价率(%)", "纯债价值", "纯债YTM(%)", "iFinD双低", "期权价值",
+     "隐含波动率(%)", "剩余期限(天)", "剩余期限(年)", "累计转股比例(%)", "转股稀释比例(%)",
+     "转股价", "正股PB", "强赎累计触发天数", "评级", "到期日", "到期赎回价", "不强赎起始日",
+     "不强赎截止日", "强赎触发比例(%)", "是否有下修条款", "下修触发比例(%)", "同花顺行业", "强赎停止交易日"]
+))
 
 
 def _params(template, trade_date):
-    if template is None:
-        return [trade_date]
-    return [trade_date if p is None else p for p in template]
+    return [trade_date] if template is None else [trade_date if p is None else p for p in template]
+
+
+def _missing_sql(col):
+    if col in STR_COLS:
+        return f"({col} IS NULL OR trim({col}) = '')"
+    return f"({col} IS NULL OR NOT isfinite({col}))"
 
 
 def check_freshness(trade_date, cols=None):
-    """Return (total_rows, {col: null_count}) for requested valuation fields."""
-    cols = cols or [field[0] for field in ALL_FIELDS]
+    cols = cols or [f[0] for f in ALL_FIELDS]
     con = connect()
-    total = con.execute(
-        "SELECT count(*) FROM valuation_daily WHERE trade_date = ?", [trade_date]
-    ).fetchone()[0]
-    if total == 0:
+    try:
+        total = con.execute("SELECT count(*) FROM valuation_daily WHERE trade_date=?", [trade_date]).fetchone()[0]
+        nulls = {col: con.execute(f"SELECT count(*) FROM valuation_daily WHERE trade_date=? AND {_missing_sql(col)}", [trade_date]).fetchone()[0]
+                 for col in cols} if total else {}
+        return total, nulls
+    finally:
         con.close()
-        return 0, {}
-
-    nulls = {}
-    for col in cols:
-        n = con.execute(
-            f"SELECT count(*) FROM valuation_daily WHERE trade_date = ? AND {col} IS NULL",
-            [trade_date],
-        ).fetchone()[0]
-        nulls[col] = n
-    con.close()
-    return total, nulls
 
 
-def _fields_to_fetch(trade_date, force=False, null_threshold=0.5):
+def _fields_to_fetch(trade_date, force=False, null_threshold=None):
     total, nulls = check_freshness(trade_date)
-    if total == 0:
-        return total, nulls, []
-
-    fields_to_fetch = []
-    for field in DATE_FIELDS:
-        db_col, ifind_key = field[:2]
-        template = field[2] if len(field) > 2 else None
-        if force or nulls.get(db_col, 0) > total * null_threshold:
-            fields_to_fetch.append((db_col, ifind_key, _params(template, trade_date)))
-
-    for db_col, ifind_key in STATIC_FIELDS:
-        if force or nulls.get(db_col, 0) > total * null_threshold:
-            fields_to_fetch.append((db_col, ifind_key, [""]))
-
-    return total, nulls, fields_to_fetch
+    fields = []
+    for field in ALL_FIELDS:
+        col, indicator = field[:2]
+        # Try every missing required/display field. Optional terms are often
+        # legitimately empty; keep their 50% threshold unless explicitly set.
+        limit = null_threshold if null_threshold is not None else (0 if col in VALUATION_CRITICAL + VALUATION_WARN else 0.5)
+        if force or nulls.get(col, 0) > total * limit:
+            template = field[2] if len(field) > 2 else ([""] if field in STATIC_FIELDS else None)
+            fields.append((col, indicator, _params(template, trade_date)))
+    return total, nulls, fields
 
 
-def refresh(trade_date, force=False, batch_size=40, null_threshold=0.5, retries=2):
-    """Re-fetch bond-side fields from iFinD and upsert to DB.
+def _convert(col, value):
+    if value is None or str(value).strip() in ("", "--", "-"):
+        return None
+    if col in STR_COLS:
+        return str(value)
+    if not finite_number(value):
+        return None
+    number = float(value)
+    if col in INT_COLS:
+        return int(number)
+    return round(number * 100, 2) if col == "implied_vol" else number
 
-    If force=False, only fetches fields whose null rate exceeds null_threshold.
-    Returns number of rows updated.
-    """
+
+def _sync_csv(path, updates):
+    if not path or not Path(path).is_file():
+        return
+    with open(path, encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        names, rows = reader.fieldnames, list(reader)
+    for row in rows:
+        for col, value in updates.get(row.get("转债代码", "").upper(), {}).items():
+            label = CSV_COLS[col]
+            if label in names:
+                row[label] = value
+    temp = str(path) + ".tmp"
+    with open(temp, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=names)
+        writer.writeheader()
+        writer.writerows(rows)
+    os.replace(temp, path)
+
+
+def refresh(trade_date, force=False, batch_size=40, null_threshold=None, retries=2,
+            csv_path=None, audit_path=None):
+    """Request only missing code/field pairs; preserve existing valid values."""
+    if batch_size <= 0 or retries < 0:
+        raise ValueError("invalid batch size or retry count")
+    total, _, fields = _fields_to_fetch(trade_date, force=force, null_threshold=null_threshold)
+    if not total or not fields:
+        print(f"[refresh] No fields need fetching for {trade_date}")
+        return 0
     con = connect()
-    codes = [r[0] for r in con.execute(
-        "SELECT code FROM valuation_daily WHERE trade_date = ? ORDER BY code",
-        [trade_date],
-    ).fetchall()]
-    con.close()
-
-    if not codes:
-        print(f"[refresh] No rows for {trade_date}")
-        return 0
-
-    total, _, fields_to_fetch = _fields_to_fetch(
-        trade_date, force=force, null_threshold=null_threshold
-    )
-    if not fields_to_fetch:
-        print(f"[refresh] Data looks fresh for {trade_date}")
-        return 0
-
-    print(f"[refresh] Re-fetching {len(fields_to_fetch)} fields for {len(codes)} bonds")
-
-    indipara = [
-        {"indicator": ifind_key, "indiparams": params}
-        for _, ifind_key, params in fields_to_fetch
-    ]
-
-    updates = {}  # code -> {db_col: value}
-    for b in batched(codes, batch_size):
-        for attempt in range(retries + 1):
-            try:
-                r = basic_data(b, indipara)
-                for t in r.get("tables", []):
-                    tbl = t.get("table", {})
-                    code = t["thscode"]
-                    for db_col, ifind_key, _ in fields_to_fetch:
-                        val = (tbl.get(ifind_key) or [None])[0]
-                        if val is not None:
-                            updates.setdefault(code, {})[db_col] = val
-                break
-            except Exception as e:
-                if attempt >= retries:
-                    print(f"[warn] batch err after {attempt + 1} attempts: {e}")
+    try:
+        requests = {}
+        for field in fields:
+            condition = "" if force else " AND " + _missing_sql(field[0])
+            codes = [r[0] for r in con.execute("SELECT code FROM valuation_daily WHERE trade_date=?" + condition + " ORDER BY code", [trade_date]).fetchall()]
+            if codes:
+                requests.setdefault(tuple(codes), []).append(field)
+    finally:
+        con.close()
+    updates, errors = {}, []
+    audit = {"trade_date": trade_date, "created_at": datetime.now(timezone.utc).isoformat(), "batches": []}
+    for codes, group in requests.items():
+        field_names = [field[0] for field in group]
+        for batch in batched(list(codes), batch_size):
+            response = None
+            for attempt in range(retries + 1):
+                try:
+                    response = basic_data(batch, [{"indicator": indicator, "indiparams": params} for _, indicator, params in group])
+                    if str(response.get("errorcode", 0)) != "0":
+                        raise RuntimeError(f"iFinD error {response.get('errorcode')}: {response.get('errmsg', '')}")
                     break
-                wait = 0.5 * (2 ** attempt)
-                print(f"[warn] batch err: {e}; retrying in {wait:.1f}s")
-                time.sleep(wait)
-        time.sleep(0.15)
-
-    if not updates:
-        print("[refresh] iFinD returned no data — may still be delayed")
-        return 0
-
-    # Upsert to DB
-    def _f(v):
-        try: return float(v)
-        except: return None
-    def _i(v):
-        try: return int(v)
-        except: return None
-    def _s(v):
-        return str(v) if v is not None else None
-
-    INT_COLS = {"surplus_days", "call_trigger_days"}
-    STR_COLS = {"rating", "maturity_date", "no_call_start", "no_call_end",
-                "has_down_revision", "ths_industry", "redemp_stop_date"}
-
-    db_rows = []
-    for code, vals in updates.items():
-        row = {"trade_date": trade_date, "code": code}
-        for db_col, raw_val in vals.items():
-            if db_col in INT_COLS:
-                row[db_col] = _i(raw_val)
-            elif db_col in STR_COLS:
-                row[db_col] = _s(raw_val)
-            else:
-                row[db_col] = _f(raw_val)
-        db_rows.append(row)
-
+                except Exception as exc:
+                    if attempt == retries:
+                        errors.append({"fields": field_names, "codes": batch, "error": str(exc)})
+                    else:
+                        time.sleep(0.5 * 2 ** attempt)
+            audit["batches"].append({"fields": field_names, "codes": batch, "response": response})
+            if response:
+                for table in response.get("tables", []):
+                    code = str(table.get("thscode", "")).strip().upper()
+                    if code not in batch:
+                        continue
+                    for col, indicator, _ in group:
+                        value = _convert(col, (table.get("table", {}).get(indicator) or [None])[0])
+                        if value is not None:
+                            updates.setdefault(code, {})[col] = value
+            time.sleep(0.15)
+    if audit_path:
+        audit.update(updated_codes=sorted(updates), batch_errors=errors)
+        Path(audit_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(audit_path).write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
     con = connect()
-    n = db_upsert(con, "valuation_daily", db_rows, ["trade_date", "code"])
-    con.close()
-    print(f"[refresh] Updated {n} rows for {trade_date}")
+    try:
+        con.execute("BEGIN TRANSACTION")
+        n = db_upsert(con, "valuation_daily", [{"trade_date": trade_date, "code": code, **vals} for code, vals in updates.items()], ["trade_date", "code"])
+        con.execute("COMMIT")
+    finally:
+        con.close()
+    _sync_csv(csv_path, updates)
+    print(f"[refresh] Updated {n} rows, {len(errors)} failed batches for {trade_date}")
+    if errors:
+        raise RuntimeError(f"{len(errors)} recovery batches failed; successful updates preserved")
     return n
 
 
 def main():
     ap = argparse.ArgumentParser(description="Check & refresh iFinD data freshness")
-    ap.add_argument("--trade-date", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--fix", action="store_true", help="Re-fetch stale fields from iFinD")
-    ap.add_argument("--force", action="store_true", help="Re-fetch all fields (ignore freshness check)")
-    ap.add_argument("--null-threshold", type=float, default=0.5,
-                    help="Fetch a field when null_count / total exceeds this ratio")
+    ap.add_argument("--trade-date", required=True)
+    ap.add_argument("--fix", action="store_true")
+    ap.add_argument("--force", action="store_true", help="Explicitly refetch existing values as well")
+    ap.add_argument("--null-threshold", type=float, default=None, help="Override repair selection threshold; does not relax validation")
     ap.add_argument("--batch-size", type=int, default=40)
     ap.add_argument("--retries", type=int, default=2)
     args = ap.parse_args()
-
+    if args.null_threshold is not None and not 0 <= args.null_threshold <= 1:
+        ap.error("--null-threshold must be between 0 and 1")
+    raw = Path(__file__).resolve().parents[1] / "data" / "raw" / f"asof={args.trade_date}"
+    if args.fix:
+        refresh(args.trade_date, force=args.force, batch_size=args.batch_size,
+                null_threshold=args.null_threshold, retries=args.retries,
+                csv_path=raw / "valuation.csv", audit_path=raw / "field_refresh_audit.json")
     total, nulls = check_freshness(args.trade_date)
-    if total == 0:
-        print(f"[check] No data for {args.trade_date}")
-        return
-
-    _, _, fields_to_fetch = _fields_to_fetch(
-        args.trade_date, force=args.force, null_threshold=args.null_threshold
-    )
-    print(f"[check] {args.trade_date}: {total} rows")
+    failures = []
     for col, n in sorted(nulls.items()):
-        rate = n / total if total else 0
-        stale = n > total * args.null_threshold
-        status = "OK" if n == 0 else f"{'STALE' if stale else 'WARN'} ({n}/{total} null, {rate:.1%})"
-        print(f"  {col}: {status}")
-
-    if fields_to_fetch and args.fix:
-        refresh(
-            args.trade_date,
-            force=args.force,
-            batch_size=args.batch_size,
-            null_threshold=args.null_threshold,
-            retries=args.retries,
-        )
-        # Re-check
-        _, nulls_after = check_freshness(args.trade_date)
-        stale_after = [c for c, n in nulls_after.items() if n > total * args.null_threshold]
-        if not stale_after:
-            print(f"[check] All fields below stale threshold for {args.trade_date}")
-        else:
-            print(f"[check] Still stale fields: {', '.join(stale_after)}")
-    elif fields_to_fetch and not args.fix:
-        print(f"[hint] Run with --fix to re-fetch stale fields")
+        print(f"  {col}: {n}/{total} missing")
+        if col in VALUATION_CRITICAL + VALUATION_WARN and n > total * null_limit(col):
+            failures.append(col)
+    if not total or failures:
+        print(f"[check] Incomplete snapshot: {', '.join(failures) or 'no rows'}")
+        if args.fix:
+            raise SystemExit(1)
     else:
-        print(f"[check] No field exceeds stale threshold {args.null_threshold:.0%}")
+        print(f"[check] Required field thresholds passed for {args.trade_date}")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,6 @@ Inputs (from dataset.json):
   - latest: bond price
   - conv_prem: conversion premium rate (%)
   - vol_20d: 20-day annualized volatility (percentage, e.g. 34.52 means 34.52%)
-  - pure_bond_ytm: pure bond yield to maturity (%)
   - surplus_years: remaining term (years)
   - pure_bond_value: pure bond value from iFinD
   - maturity_call_price: maturity redemption price from iFinD
@@ -26,7 +25,8 @@ Usage:
 import argparse, json, math, os, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
+from _snapshot_policy import finite_number
 
 
 def _norm_cdf(x):
@@ -76,12 +76,11 @@ def main():
         price = it.get("latest")
         conv_prem = it.get("conv_prem")
         vol_20d = it.get("vol_20d")
-        ytm = it.get("pure_bond_ytm")
         surplus_years = it.get("surplus_years")
         pure_bond_val = it.get("pure_bond_value")
         maturity_call = it.get("maturity_call_price")
 
-        if not all(v is not None for v in [price, conv_prem, vol_20d]):
+        if not all(finite_number(v) for v in [price, conv_prem, vol_20d]):
             results.append(None)
             continue
         if price <= 0 or conv_prem <= -90 or vol_20d <= 0:
@@ -116,7 +115,7 @@ def main():
         # Pure bond value: use iFinD value if available.
         # If unavailable, skip this bond — K*exp(-rT) ignores coupons
         # and credit spread, producing unreliable bs_value.
-        if pure_bond_val and pure_bond_val > 0:
+        if finite_number(pure_bond_val) and pure_bond_val > 0:
             pbv = pure_bond_val
         else:
             results.append(None)
@@ -137,7 +136,10 @@ def main():
         })
         priced += 1
 
-    db_rows = [r for r in results if r is not None]
+    bs_fields = ("bs_value", "relative_value", "bs_delta", "bs_gamma", "bs_theta", "bs_vega")
+    db_rows = [result or {"trade_date": args.trade_date, "code": item["code"],
+                         **dict.fromkeys(bs_fields)}
+               for item, result in zip(items, results)]
     if db_rows:
         con = connect()
         n = db_upsert(con, "valuation_daily", db_rows, ["trade_date", "code"])
@@ -145,7 +147,7 @@ def main():
         print(f"[db] valuation_daily BS fields upserted for {n} rows")
 
     # Also write BS fields back into dataset.json (avoids needing a 2nd assemble run)
-    bs_map = {r["code"]: r for r in db_rows if r}
+    bs_map = {r["code"]: r for r in db_rows}
     for it in items:
         bs = bs_map.get(it["code"])
         if bs:

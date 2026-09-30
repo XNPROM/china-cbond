@@ -161,6 +161,7 @@
           <span>{{ view_model.backtest.summary.trading_days }} 个交易日</span>
           <span>{{ view_model.backtest.summary.n_rebalances }} 次调仓</span>
         </div>
+        {% if view_model.backtest.summary.data_note %}<p class="section-note">{{ view_model.backtest.summary.data_note }}</p>{% endif %}
         <div class="backtest-returns">
           {% set curves = [
             ("双低 Top10", "dl"),
@@ -168,7 +169,7 @@
             ("平衡双低", "balanced"),
             ("偏债双低", "debt"),
             ("低估 Top10", "rv"),
-            ("中证转债", "bench"),
+            (view_model.backtest.summary.benchmark_label, "bench"),
           ] %}
           {% for label, key in curves %}
           {% set cum = view_model.backtest.summary["cum_return_" ~ key ~ "_pct"] | default(0) %}

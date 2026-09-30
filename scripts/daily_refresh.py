@@ -22,7 +22,7 @@ import traceback
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _db import connect, init_schema, upsert as db_upsert
+from _db import connect, upsert as db_upsert
 
 
 PY = "/usr/local/bin/python3.12"
@@ -38,7 +38,6 @@ def _run_id(trade_date, step):
 
 def _log_run(trade_date, step, started_at, finished_at, status, row_count=0, note=""):
     con = connect()
-    init_schema(con)
     db_upsert(con, "etl_runs", [{
         "run_id": _run_id(trade_date, step),
         "trade_date": trade_date,
@@ -57,21 +56,20 @@ def _run_step(trade_date, step, cmd, cwd, required=True):
     print(f"\n[{step}] {' '.join(cmd)}")
     try:
         proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
-        if proc.stdout:
-            print(proc.stdout, end="")
-        if proc.stderr:
-            print(proc.stderr, end="", file=sys.stderr)
-        status = "ok" if proc.returncode == 0 else "failed"
-        _log_run(trade_date, step, started, _now(), status, note=(proc.stderr or proc.stdout or ""))
-        if proc.returncode != 0 and required:
-            raise RuntimeError(f"{step} failed with exit code {proc.returncode}")
-        return proc.returncode
-    except Exception as exc:
+    except Exception:
         _log_run(trade_date, step, started, _now(), "failed", note=traceback.format_exc())
         if required:
             raise
-        print(f"[warn] optional step {step} failed: {exc}")
         return 1
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+    _log_run(trade_date, step, started, _now(), "ok" if proc.returncode == 0 else "failed",
+             note=(proc.stderr or proc.stdout or ""))
+    if proc.returncode and required:
+        raise RuntimeError(f"{step} failed with exit code {proc.returncode}")
+    return proc.returncode
 
 
 def _count_rows(trade_date, table):
@@ -208,7 +206,7 @@ def main():
     ap.add_argument("--skip-vol", action="store_true", help="Skip volatility fetch")
     ap.add_argument("--skip-backtest", action="store_true", help="Skip backtest computation")
     ap.add_argument("--backtest-days", type=int, default=90, help="Calendar days to look back for backtest")
-    ap.add_argument("--allow-validate-warnings", action="store_true")
+
     args = ap.parse_args()
 
     cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -240,12 +238,10 @@ def main():
     strategy_jsonl = os.path.join(raw_dir, "strategy_picks.jsonl")
     themes_jsonl = os.path.join(raw_dir, "themes.jsonl")
     themes_progress = os.path.join(raw_dir, "themes_rewrite_progress.jsonl")
-    strategy_md = os.path.join(report_dir, "cbond_strategy.md")
     # backtest_weekly.py writes to asof=YYYYMMDD (no dashes), matching upstream
     backtest_json = os.path.join(cwd, "data", "raw", f"asof={trade_date.replace('-', '')}", "backtest_weekly.json")
 
     con = connect()
-    init_schema(con)
     con.close()
 
     if args.refresh_universe or (not args.skip_fetch and snapshot_date is None):
@@ -281,7 +277,7 @@ def main():
             PY, "scripts/refresh_data.py",
             "--trade-date", trade_date,
             "--fix",
-        ], cwd, required=False)
+        ], cwd)
 
     if not args.skip_vol:
         _run_step(trade_date, "compute_volatility", [
@@ -340,7 +336,9 @@ def main():
             "--start-date", bt_start,
             "--end-date", bt_end,
             "--from-db",   # data is already in DB after valuation steps
-        ], cwd, required=False)
+        ] + ([] if args.skip_valuation and args.skip_vol else ["--refresh-benchmark"]), cwd)
+        if not os.path.isfile(backtest_json):
+            raise RuntimeError("backtest succeeded without producing its dated artifact")
 
     validate_cmd = [
         PY, "scripts/validate_snapshot.py",
@@ -348,8 +346,9 @@ def main():
         "--dataset", dataset,
         "--codes", codes,
     ]
-    if not args.allow_validate_warnings:
-        validate_cmd.append("--strict")
+    validate_cmd.append("--strict")
+    if not args.skip_backtest:
+        validate_cmd += ["--backtest", backtest_json]
     _run_step(trade_date, "validate_snapshot", validate_cmd, cwd)
 
     render_cmd = [
@@ -359,7 +358,7 @@ def main():
         "--title", f"可转债概览 · {trade_date}",
         "--trade-date", trade_date,
     ]
-    if os.path.exists(backtest_json):
+    if not args.skip_backtest and os.path.exists(backtest_json):
         render_cmd += ["--backtest", backtest_json]
     render_cmd += ["--update-index"]
     _run_step(trade_date, "render_html", render_cmd, cwd)

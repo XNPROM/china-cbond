@@ -7,7 +7,7 @@ import argparse, csv, json, os, sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _db import connect, init_schema, upsert
+from _db import connect, upsert
 
 
 def load_universe(con, raw_dir, trade_date):
@@ -126,7 +126,6 @@ def main():
     args = ap.parse_args()
 
     con = connect()
-    init_schema(con)
     load_universe(con, args.raw, args.trade_date)
     load_valuation(con, args.raw, args.trade_date)
     load_vol(con, args.raw, args.trade_date)

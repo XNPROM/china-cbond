@@ -74,8 +74,8 @@ class SectorClassificationTests(unittest.TestCase):
         self.assertEqual(_classify_sector(0), "偏债")
 
     def test_none_delta(self):
-        """None delta should default to 偏债"""
-        self.assertEqual(_classify_sector(None), "偏债")
+        """Missing delta must not masquerade as a debt-like bond"""
+        self.assertEqual(_classify_sector(None), "未分类")
 
     def test_none_delta_note_format(self):
         self.assertEqual(_format_delta(None), "N/A")

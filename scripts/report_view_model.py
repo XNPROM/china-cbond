@@ -45,14 +45,7 @@ def to_float(value, default=None):
             return default
 
 
-def derive_sector(delta_value):
-    if delta_value is None:
-        return "偏债"
-    if delta_value >= 0.7:
-        return "偏股"
-    if delta_value >= 0.4:
-        return "平衡"
-    return "偏债"
+from _snapshot_policy import classify_sector as derive_sector
 
 
 def relative_value_state(rv_value):
@@ -132,6 +125,7 @@ def normalize_card(card, theme, idx):
         "conv": {"text": card.get("conv", ""), "value": conv_value},
         "pure": {"text": card.get("pure", ""), "value": pure_value},
         "vol": {"text": card.get("vol", ""), "value": vol_value},
+        "implied_vol": {"text": card.get("implied_vol", ""), "value": to_float(card.get("implied_vol"))},
         "pure_bond_ytm": {"text": card.get("pure_bond_ytm", ""), "value": ytm_value},
         "relative_value": {
             "text": card.get("relative_value", ""),
@@ -178,18 +172,15 @@ def normalize_card(card, theme, idx):
 
 
 def build_highlights(items):
-    candidates = [item for item in items if item["relative_value"]["value"] is not None]
-    ranked = sorted(
-        candidates,
-        key=lambda item: (
-            item["relative_value"]["value"],
-            item["conv"]["value"] if item["conv"]["value"] is not None else 999.0,
-            -(item["delta"]["value"] or 0.0),
-        ),
-    )
     highlights = []
-    labels = ["最低相对价值", "低溢价关注", "高弹性关注", "高波动关注"]
-    for label, item in zip(labels, ranked[:4]):
+    for label, metric, descending in (
+        ("最低相对价值", "relative_value", False), ("低溢价关注", "conv", False),
+        ("高弹性关注", "delta", True), ("高波动关注", "vol", True),
+    ):
+        eligible = [item for item in items if item[metric]["value"] is not None]
+        if not eligible:
+            continue
+        item = sorted(eligible, key=lambda item: item[metric]["value"], reverse=descending)[0]
         highlights.append(
             {
                 "label": label,
@@ -267,8 +258,14 @@ def build_backtest_payload(backtest):
         "start_date": backtest.get("start_date", ""),
         "end_date": backtest.get("end_date", ""),
         "trading_days": backtest.get("trading_days", 0),
+        "data_note": (
+            f"历史样本缺少 {backtest['trading_days'] - backtest.get('observed_trading_days', backtest['trading_days'])} 个交易日；年化按指数交易日计算，调仓依赖可得样本。"
+            if backtest.get("observed_trading_days", backtest.get("trading_days", 0)) < backtest.get("trading_days", 0)
+            else ("未获得完整指数日历；年化暂按可得样本日估算。" if backtest.get("calendar_basis") == "observed" else "")
+        ),
         "n_rebalances": backtest.get("n_rebalances", 0),
         "sector_method": backtest.get("sector_method", "delta"),
+        "benchmark_label": "全市场等权" if backtest.get("benchmark") == "equal_weight" else "中证转债",
     }
     for k in CURVES:
         summary[f"cum_return_{k}_pct"] = backtest.get(f"cum_return_{k}_pct", 0)

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS valuation_daily (
   pure_bond_ytm DOUBLE,
   ifind_doublelow DOUBLE,
   option_value DOUBLE,
+  implied_vol DOUBLE,
   surplus_days INTEGER,
   surplus_years DOUBLE,
   accum_conv_ratio DOUBLE,
@@ -113,6 +114,7 @@ CREATE TABLE IF NOT EXISTS etl_runs (
 );
 
 -- Secondary indexes for common query patterns
+ALTER TABLE valuation_daily ADD COLUMN IF NOT EXISTS implied_vol DOUBLE;
 CREATE INDEX IF NOT EXISTS idx_val_code_date ON valuation_daily(code, trade_date);
 CREATE INDEX IF NOT EXISTS idx_strat_date_strat ON strategy_picks(trade_date, strategy);
 CREATE INDEX IF NOT EXISTS idx_vol_ucode_date ON vol_daily(ucode, trade_date);
