@@ -2,7 +2,7 @@ name: Deploy Report to GitHub Pages
 
 on:
   push:
-    branches: [main, developer-1]
+    branches: [main]
     paths:
       - 'reports/*/cbond_overview.html'
       - 'reports/*/cbond_overview.md'
@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   build-and-deploy:
+    # github-pages permits main only, including manual dispatches.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
