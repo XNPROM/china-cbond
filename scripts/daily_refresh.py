@@ -168,6 +168,12 @@ def _universe_snapshot_for_date(cwd, snapshot_date):
     return snapshot_date, codes, universe
 
 
+def _tradability_verified(snapshot):
+    with open(snapshot[2], encoding='utf-8') as handle:
+        payload = json.load(handle)
+    return payload.get('tradability_policy') == 1 and payload.get('tradability_checked_asof') == snapshot[0]
+
+
 def _latest_universe_snapshot(cwd, trade_date):
     """Return the newest complete universe snapshot on or before trade_date."""
     candidates = []
@@ -227,7 +233,7 @@ def main():
         print(f"[universe] reuse local snapshot asof={snapshot_date}")
     else:
         local_today = _universe_snapshot_for_date(cwd, trade_date)
-        if local_today:
+        if local_today and _tradability_verified(local_today):
             snapshot_date, codes, universe = local_today
             print(f"[universe] reuse today's local snapshot asof={snapshot_date}")
     dataset = os.path.join(raw_dir, "dataset.json")

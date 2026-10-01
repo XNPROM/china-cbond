@@ -35,3 +35,31 @@ def test_kernel_lock_handles_contention_and_old_lock_file(tmp_path):
     # The file remains, but no live process owns the lock.
     assert subprocess.run(cmd,capture_output=True).returncode==0
     assert marker.exists()
+
+
+@pytest.mark.parametrize('status,expected', [(302, 0), (404, 0), (503, 1)])
+def test_network_probe_uses_configured_session_without_credentials(monkeypatch, status, expected):
+    import _network
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def head(self, url, **kwargs):
+            assert url == 'https://quantapi.51ifind.com/'
+            assert 'headers' not in kwargs and kwargs['allow_redirects'] is False
+            return type('Response', (), {'status_code': status})()
+    monkeypatch.setattr(_network, 'configure_session', lambda s: Session())
+    assert _network.probe_network() == expected
+
+
+def test_network_probe_does_not_log_proxy_credentials(monkeypatch, capsys):
+    import _network
+    import requests
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def head(self, *args, **kwargs):
+            raise requests.ConnectionError('Failed to resolve https://user:secret@proxy.invalid')
+    monkeypatch.setattr(_network, 'configure_session', lambda s: Session())
+    assert _network.probe_network() == 1
+    output = capsys.readouterr().out
+    assert 'DNS resolution' in output and 'secret' not in output

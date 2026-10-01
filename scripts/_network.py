@@ -153,3 +153,32 @@ def proxy_host_hint():
         return parsed.hostname + (f":{parsed.port}" if parsed.port else "")
     except (AttributeError, ValueError):
         return "configured"
+
+
+def probe_network():
+    """Check the same HTTPS route as iFinD, without credentials or API quota."""
+    import requests
+    print(f'[network] route={route_description()}', flush=True)
+    try:
+        with configure_session(requests.Session()) as session:
+            response = session.head('https://quantapi.51ifind.com/', timeout=(8, 12), allow_redirects=False)
+            if response.status_code >= 500:
+                print(f'[network] unavailable: HTTP {response.status_code}')
+                return 1
+            print(f'[network] HTTPS reachable: HTTP {response.status_code} (authentication not tested)')
+            return 0
+    except requests.RequestException as exc:
+        # Do not echo potentially credential-bearing proxy URLs or headers.
+        message = str(exc).lower()
+        category = ('DNS resolution' if 'resolve' in message or 'name resolution' in message
+                    else type(exc).__name__)
+        print(f'[network] unavailable: {category}; retry after network recovery')
+        return 1
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--probe', action='store_true', required=True)
+    parser.parse_args()
+    raise SystemExit(probe_network())

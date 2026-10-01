@@ -25,7 +25,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, upsert as db_upsert
-from _ifind import history, ths_dr
+from _ifind import basic_data, batched, history, ths_dr
 
 
 FIELDS = (
@@ -56,6 +56,47 @@ def _date_norm(s):
     if not s:
         return ""
     return s.replace("/", "").replace("-", "")
+
+
+def _attach_stop_dates(bonds):
+    """p05479 may retain redeemed bonds; verify before quote expectations freeze."""
+    indicator = 'ths_redemp_stop_trading_date_bond'
+    by_code = {bond['code']: bond for bond in bonds}
+    for batch in batched(list(by_code), 80):
+        response = basic_data(batch, [{'indicator': indicator, 'indiparams': ['']}])
+        if str(response.get('errorcode', 0)) != '0':
+            raise RuntimeError('stop-trading date request failed')
+        returned = set()
+        for table in response.get('tables', []):
+            code = str(table.get('thscode', '')).strip().upper()
+            if code not in batch:
+                continue
+            values = table.get('table', {}).get(indicator)
+            if not isinstance(values, list) or not values:
+                raise RuntimeError(f'stop-trading date response missing for {code}')
+            value = values[0]
+            normalized = _date_norm(str(value)) if value not in (None, '', '--', '-') else ''
+            if normalized:
+                try:
+                    datetime.strptime(normalized, '%Y%m%d')
+                except ValueError as exc:
+                    raise RuntimeError(f'invalid stop-trading date for {code}') from exc
+            by_code[code]['redemp_stop_date'] = normalized
+            returned.add(code)
+        if returned != set(batch):
+            raise RuntimeError(f'stop-trading date coverage missing: {sorted(set(batch)-returned)}')
+
+
+def _filter_stopped_bonds(bonds, date_ymd):
+    active, excluded = [], []
+    for bond in bonds:
+        stop = _date_norm(bond.get('redemp_stop_date', ''))
+        if stop and stop <= date_ymd:
+            excluded.append({'code': bond['code'], 'name': bond.get('name', ''),
+                             'redemp_stop_date': stop, 'reason': 'stopped_trading'})
+        else:
+            active.append(bond)
+    return active, excluded
 
 
 def _recovery_candidates(rows, existing_codes, date_ymd):
@@ -348,13 +389,22 @@ def main():
     else:
         bonds = fetch_universe(date_ymd)
 
+    if not args.reuse_existing:
+        _attach_stop_dates(bonds)
+    bonds, exclusions = _filter_stopped_bonds(bonds, date_ymd)
+    for item in exclusions:
+        print(f"[filter] excluded {item['code']} {item['name']}: stopped trading on {item['redemp_stop_date']}")
+
     asof = f"{date_ymd[:4]}-{date_ymd[4:6]}-{date_ymd[6:]}"
     base_dir = f"data/raw/asof={asof}"
 
     json_path = args.out_json or f"{base_dir}/cbond_universe.json"
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({"asof": asof, "count": len(bonds), "items": bonds},
+        json.dump({"asof": asof, "count": len(bonds), "items": bonds,
+                   "tradability_policy": 1,
+                   "tradability_checked_asof": asof if not args.reuse_existing else "",
+                   "tradability_exclusions": exclusions},
                   f, ensure_ascii=False, indent=2)
     print(f"[json] → {json_path}")
 

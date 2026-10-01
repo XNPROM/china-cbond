@@ -9,16 +9,25 @@ if [ "${CBOND_AUTO_LOCK_HELD:-}" != "1" ]; then
   exec "$PY" "$REPO_ROOT/scripts/_run_locked.py" "$REPO_ROOT/data/.auto_daily.flock" /bin/bash "$0" "$@"
 fi
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new}"
-DATE="${1:-$(date +%Y-%m-%d)}"
+export TZ=Asia/Shanghai
 LOG_DIR="$REPO_ROOT/data/logs"
 mkdir -p "$LOG_DIR"
+PLAN=0
+if [ "${1:-}" = "--plan" ]; then PLAN=1; shift; fi
+if [ "$#" -gt 1 ]; then echo 'usage: auto_daily.sh [--plan] [YYYY-MM-DD]' >&2; exit 1; fi
+if [ -n "${1:-}" ]; then
+  DATE=$("$PY" scripts/_auto_schedule.py --trade-date "$1" 2>> "$LOG_DIR/schedule.log")
+else
+  DATE=$("$PY" scripts/_auto_schedule.py 2>> "$LOG_DIR/schedule.log")
+fi
+schedule_rc=$?
+if [ "$schedule_rc" -eq 3 ]; then echo '[skip] exchange closure; see data/logs/schedule.log'; exit 0; fi
+if [ "$schedule_rc" -ne 0 ]; then echo '[fail] date resolution; see data/logs/schedule.log' >&2; exit 1; fi
+if [ "$PLAN" -eq 1 ]; then echo "[plan] target=$DATE (no API calls or publication)"; exit 0; fi
 LOG="$LOG_DIR/auto_${DATE}.log"
 RECEIPT="$LOG_DIR/published_${DATE}.commit"
-DOW=$(date -j -f "%Y-%m-%d" "$DATE" +%u 2>/dev/null || date -d "$DATE" +%u) || exit 1
-if [ "$DOW" = 6 ] || [ "$DOW" = 7 ]; then
-  echo "[skip] $DATE is weekend" >> "$LOG"
-  exit 0
-fi
+trap 'echo "[interrupted] received SIGTERM; no completion receipt written" >> "$LOG"; exit 143' TERM
+trap 'echo "[interrupted] received SIGINT; no completion receipt written" >> "$LOG"; exit 130' INT
 # A tracked or large HTML file is not proof that git push succeeded.
 if [ -z "${1:-}" ] && [ -f "$RECEIPT" ] \
    && [ "$(cat "$RECEIPT")" = "$(git rev-parse HEAD)" ] \
@@ -40,13 +49,17 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   echo "[attempt $attempt/$ATTEMPTS] $(date -Iseconds) daily_refresh for $DATE" >> "$LOG"
   # Same path on every attempt: reuse valid data, request only missing fields.
   # No forced full fetch and no weaker downstream salvage path.
-  if "$PY" scripts/daily_refresh.py --trade-date "$DATE" >> "$LOG" 2>&1; then
+  if ! "$PY" scripts/_network.py --probe >> "$LOG" 2>&1; then
+    echo '[warn] network not ready; pipeline not started' >> "$LOG"
+  elif "$PY" scripts/daily_refresh.py --trade-date "$DATE" >> "$LOG" 2>&1; then
     success=1
     break
+  else
+    echo "[warn] pipeline attempt $attempt failed; see preceding step output" >> "$LOG"
   fi
   if [ "$attempt" -lt "$ATTEMPTS" ]; then
     delay=$((WAIT_SECONDS * attempt))
-    echo "[wait] incomplete snapshot; retry missing data in ${delay}s" >> "$LOG"
+    echo "[wait] network or snapshot not ready; retry in ${delay}s" >> "$LOG"
     sleep "$delay"
   fi
 done

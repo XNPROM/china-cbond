@@ -21,7 +21,7 @@ def publisher(tmp_path):
     repo = tmp_path / 'repo'
     repo.mkdir()
     (repo / 'scripts').mkdir()
-    for name in ('auto_daily.sh', '_run_locked.py'):
+    for name in ('auto_daily.sh', '_run_locked.py', '_auto_schedule.py', 'trading_calendar.json'):
         shutil.copy2(ROOT / 'scripts' / name, repo / 'scripts' / name)
     git(repo, 'init')
     git(repo, 'config', 'user.email', 'tests@example.invalid')
@@ -36,12 +36,14 @@ def publisher(tmp_path):
     fake.write_text(f'#!{sys.executable}\n' + r'''
 import json, os, pathlib, sys
 args = sys.argv[1:]
-if args[0].endswith('_run_locked.py'):
+if args[0].endswith(('_run_locked.py', '_auto_schedule.py')):
     os.execv(sys.executable, [sys.executable, *args])
 repo = pathlib.Path.cwd()
 with (repo / 'data' / 'calls.jsonl').open('a') as f:
     f.write(json.dumps(args) + '\n')
 scenario = os.environ.get('SCENARIO', 'ok')
+if args[0].endswith('_network.py') and scenario == 'network_down':
+    sys.exit(1)
 if args[0].endswith('daily_refresh.py'):
     count_file = repo / 'data' / 'attempts'
     n = int(count_file.read_text()) + 1 if count_file.exists() else 1
@@ -59,8 +61,8 @@ if args[0].endswith('validate_snapshot.py'):
 ''')
     fake.chmod(0o755)
     env = dict(os.environ, CBOND_PYTHON=str(fake), AUTO_DAILY_ATTEMPTS='2', AUTO_DAILY_WAIT='0')
-    def run(scenario='ok'):
-        return subprocess.run(['/bin/bash', str(repo / 'scripts/auto_daily.sh'), DATE],
+    def run(scenario='ok', date=DATE):
+        return subprocess.run(['/bin/bash', str(repo / 'scripts/auto_daily.sh'), date],
                               env=dict(env, SCENARIO=scenario), capture_output=True,
                               text=True, timeout=25)
     return repo, remote, run
@@ -102,3 +104,27 @@ def test_failed_push_is_retried_without_new_report_changes(publisher):
     assert run().returncode == 0
     assert git(repo, 'rev-parse', 'HEAD') == head
     assert git(remote, 'rev-parse', 'main') == head
+
+
+def test_network_failure_does_not_start_pipeline_or_publish(publisher):
+    repo, _, run = publisher
+    before = git(repo, 'rev-parse', 'HEAD')
+    assert run('network_down').returncode == 1
+    assert not (repo / 'data/attempts').exists()
+    assert git(repo, 'rev-parse', 'HEAD') == before
+    assert 'network not ready' in (repo / f'data/logs/auto_{DATE}.log').read_text()
+
+
+def test_explicit_holiday_skips_without_api_calls(publisher):
+    repo, _, run = publisher
+    assert run(date='2026-09-25').returncode == 0
+    assert not (repo / 'data/calls.jsonl').exists()
+    assert 'exchange closure' in (repo / 'data/logs/schedule.log').read_text()
+
+
+def test_no_argument_plan_works_on_macos_bash_without_api_calls(publisher):
+    repo, _, run = publisher
+    result = run(date='--plan')
+    assert result.returncode == 0, result.stderr
+    assert '[plan] target=' in result.stdout
+    assert not (repo / 'data/calls.jsonl').exists()

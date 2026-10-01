@@ -81,6 +81,9 @@ def main():
         css=css,
         js=js,
     )
+    # Jinja control blocks leave indentation-only lines in generated reports.
+    html_out = "".join("\n" if not line.strip() else line
+                       for line in html_out.splitlines(keepends=True))
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as handle:

@@ -10,6 +10,39 @@ import pytest
 from fetch_cb_universe import _delete_universe_orphans, _recovery_candidates
 
 
+def test_stop_date_filters_on_first_closed_day_not_last_trading_day():
+    from fetch_cb_universe import _filter_stopped_bonds
+    bonds = [{'code': '123258.SZ', 'redemp_stop_date': '2026/09/30'},
+             {'code': '110075.SH', 'redemp_stop_date': ''}]
+    assert len(_filter_stopped_bonds(bonds, '20260929')[0]) == 2
+    active, excluded = _filter_stopped_bonds(bonds, '20260930')
+    assert [b['code'] for b in active] == ['110075.SH']
+    assert excluded[0]['code'] == '123258.SZ'
+
+
+def test_stop_date_check_keeps_null_and_excludes_confirmed_stop(monkeypatch):
+    import fetch_cb_universe as module
+    indicator = 'ths_redemp_stop_trading_date_bond'
+    def response(codes, fields):
+        assert fields == [{'indicator': indicator, 'indiparams': ['']}]
+        return {'errorcode': 0, 'tables': [
+            {'thscode': '123258.SZ', 'table': {indicator: ['2026-09-30']}},
+            {'thscode': '110075.SH', 'table': {indicator: [None]}}]}
+    monkeypatch.setattr(module, 'basic_data', response)
+    bonds = [{'code': '123258.SZ'}, {'code': '110075.SH'}]
+    module._attach_stop_dates(bonds)
+    assert [b['code'] for b in module._filter_stopped_bonds(bonds, '20260930')[0]] == ['110075.SH']
+
+
+@pytest.mark.parametrize('tables', [[], [{'thscode': '110075.SH', 'table': {}}],
+    [{'thscode': '110075.SH', 'table': {'ths_redemp_stop_trading_date_bond': ['invalid']}}]])
+def test_incomplete_or_invalid_stop_date_check_cannot_shrink_universe(monkeypatch, tables):
+    import fetch_cb_universe as module
+    monkeypatch.setattr(module, 'basic_data', lambda *args: {'errorcode': 0, 'tables': tables})
+    with pytest.raises(RuntimeError):
+        module._attach_stop_dates([{'code': '110075.SH'}])
+
+
 def test_recovery_candidates_only_include_date_eligible_omissions():
     rows = [
         ("111012.SH", "福新转债", "605488.SH", "福莱新材", "20230207", "20290103"),
