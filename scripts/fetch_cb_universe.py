@@ -99,6 +99,24 @@ def _filter_stopped_bonds(bonds, date_ymd):
     return active, excluded
 
 
+def _filter_unlisted_bonds(bonds, date_ymd):
+    """Historical data_pool snapshots can include bonds listed after edate."""
+    active, excluded = [], []
+    for bond in bonds:
+        listed = _date_norm(bond.get('listed', ''))
+        if listed:
+            try:
+                datetime.strptime(listed, '%Y%m%d')
+            except ValueError as exc:
+                raise RuntimeError(f"invalid listing date for {bond['code']}") from exc
+        if listed and listed > date_ymd:
+            excluded.append({'code': bond['code'], 'name': bond.get('name', ''),
+                             'listed': listed, 'reason': 'not_yet_listed'})
+        else:
+            active.append(bond)
+    return active, excluded
+
+
 def _recovery_candidates(rows, existing_codes, date_ymd):
     candidates = []
     for code, name, ucode, uname, listed, maturity in rows:
@@ -389,6 +407,9 @@ def main():
     else:
         bonds = fetch_universe(date_ymd)
 
+    bonds, listing_exclusions = _filter_unlisted_bonds(bonds, date_ymd)
+    for item in listing_exclusions:
+        print(f"[filter] excluded {item['code']} {item['name']}: listed after as-of on {item['listed']}")
     if not args.reuse_existing:
         _attach_stop_dates(bonds)
     bonds, exclusions = _filter_stopped_bonds(bonds, date_ymd)
@@ -402,9 +423,9 @@ def main():
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({"asof": asof, "count": len(bonds), "items": bonds,
-                   "tradability_policy": 1,
+                   "tradability_policy": 2,
                    "tradability_checked_asof": asof if not args.reuse_existing else "",
-                   "tradability_exclusions": exclusions},
+                   "tradability_exclusions": listing_exclusions + exclusions},
                   f, ensure_ascii=False, indent=2)
     print(f"[json] → {json_path}")
 

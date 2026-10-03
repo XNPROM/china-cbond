@@ -10,6 +10,23 @@ import pytest
 from fetch_cb_universe import _delete_universe_orphans, _recovery_candidates
 
 
+def test_historical_universe_excludes_only_future_listings():
+    from fetch_cb_universe import _filter_unlisted_bonds
+    bonds = [{'code': '113702.SH', 'listed': '2026/05/11'},
+             {'code': '123267.SZ', 'listed': '2026-04-22'},
+             {'code': '110075.SH', 'listed': ''}]
+    active, excluded = _filter_unlisted_bonds(bonds, '20260422')
+    assert [b['code'] for b in active] == ['123267.SZ', '110075.SH']
+    assert excluded == [{'code': '113702.SH', 'name': '', 'listed': '20260511',
+                         'reason': 'not_yet_listed'}]
+
+
+def test_invalid_listing_date_fails_instead_of_silently_dropping_bond():
+    from fetch_cb_universe import _filter_unlisted_bonds
+    with pytest.raises(RuntimeError, match='invalid listing date'):
+        _filter_unlisted_bonds([{'code': '113702.SH', 'listed': 'bad'}], '20260422')
+
+
 def test_stop_date_filters_on_first_closed_day_not_last_trading_day():
     from fetch_cb_universe import _filter_stopped_bonds
     bonds = [{'code': '123258.SZ', 'redemp_stop_date': '2026/09/30'},

@@ -1,11 +1,25 @@
 import os
 import sys
 import json
+import pytest
 
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from daily_refresh import _latest_universe_snapshot
+
+
+@pytest.mark.parametrize('policy,checked,expected', [
+    (1, '2026-07-13', False),
+    (2, '2026-07-12', False),
+    (2, '2026-07-13', True),
+])
+def test_reuse_requires_listing_and_stop_date_policy(tmp_path, policy, checked, expected):
+    from daily_refresh import _tradability_verified
+    path = tmp_path / 'universe.json'
+    path.write_text(json.dumps({'tradability_policy': policy,
+                               'tradability_checked_asof': checked}))
+    assert _tradability_verified(('2026-07-13', '', str(path))) is expected
 
 
 def _snapshot(root, date, complete=True):

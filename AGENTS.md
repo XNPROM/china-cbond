@@ -225,3 +225,4 @@ Architecture: `render_html.py` → Jinja2 → single self-contained HTML. CSS in
 - `auto_daily.sh` uses `_run_locked.py` for a kernel lock and a successful-push receipt, stages only dated report files, preserves unrelated staged changes, and retries pending pushes with no new diff.
 - `--from-db` is offline for benchmark data too. Explicit `--refresh-benchmark` permits an index fetch and populates `data/benchmark_000832.json`; absent complete cache, label the benchmark as equal-weight.
 - Fresh schema must include `implied_vol`; migrations must be idempotent. `connect()` owns schema initialization. Validation uses a read-only connection.
+- Historical `p05479` can include bonds listed after the requested date. Exclude confirmed future listings before freezing the expected quote set, keeping listing-day bonds. Snapshot `tradability_policy=2` certifies both listing-date and stop-trading-date filters; normal refresh must refetch older policies.

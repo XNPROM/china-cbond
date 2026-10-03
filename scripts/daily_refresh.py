@@ -171,7 +171,7 @@ def _universe_snapshot_for_date(cwd, snapshot_date):
 def _tradability_verified(snapshot):
     with open(snapshot[2], encoding='utf-8') as handle:
         payload = json.load(handle)
-    return payload.get('tradability_policy') == 1 and payload.get('tradability_checked_asof') == snapshot[0]
+    return payload.get('tradability_policy') == 2 and payload.get('tradability_checked_asof') == snapshot[0]
 
 
 def _latest_universe_snapshot(cwd, trade_date):
