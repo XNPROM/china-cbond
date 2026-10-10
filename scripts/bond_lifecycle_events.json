@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "events": [
     {
       "code": "128134.SZ",
@@ -11,7 +11,8 @@
       "delisting_date": "2026-10-09",
       "redemption_price": 110.0,
       "lifecycle_source": "https://epaper.cs.com.cn/zgzqb/html/2026-09/28/nw.D110000zgzqb_20260928_1-B014.htm",
-      "redemption_payment_date": "2026-10-09"
+      "redemption_payment_date": "2026-10-09",
+      "redemption_kind": "maturity_redemption"
     },
     {
       "code": "127067.SZ",
@@ -22,7 +23,90 @@
       "redemption_date": "2026-09-09",
       "redemption_payment_date": "2026-09-16",
       "redemption_price": 100.25,
-      "lifecycle_source": "https://disc.static.szse.cn/download/disc/disk03/finalpage/2026-08-20/09d95607-e1e5-43a9-836e-a87ada59df54.PDF"
+      "lifecycle_source": "https://disc.static.szse.cn/download/disc/disk03/finalpage/2026-08-20/09d95607-e1e5-43a9-836e-a87ada59df54.PDF",
+      "redemption_kind": "forced_redemption"
+    },
+    {
+      "code": "113658.SH",
+      "announced_on": "2026-07-23",
+      "last_trade_date": "2026-08-06",
+      "stop_trading_date": "2026-08-07",
+      "conversion_end_date": "2026-08-11",
+      "redemption_date": "2026-08-12",
+      "redemption_payment_date": "2026-08-12",
+      "delisting_date": "2026-08-12",
+      "redemption_price": 101.3562,
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://static.cninfo.com.cn/finalpage/2026-07-23/1225437421.PDF"
+    },
+    {
+      "code": "118053.SH",
+      "announced_on": "2026-08-03",
+      "last_trade_date": "2026-08-07",
+      "stop_trading_date": "2026-08-10",
+      "conversion_end_date": "2026-08-12",
+      "redemption_date": "2026-08-13",
+      "redemption_payment_date": "2026-08-13",
+      "delisting_date": "2026-08-13",
+      "redemption_price": 100.1622,
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://static.cninfo.com.cn/finalpage/2026-08-03/1225452766.PDF"
+    },
+    {
+      "code": "113697.SH",
+      "announced_on": "2026-08-14",
+      "last_trade_date": "2026-08-24",
+      "stop_trading_date": "2026-08-25",
+      "conversion_end_date": "2026-08-27",
+      "redemption_date": "2026-08-28",
+      "redemption_payment_date": "2026-08-28",
+      "delisting_date": "2026-08-28",
+      "redemption_price": 100.094,
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://paper.cnstock.com/html/2026-08/14/content_2254836.htm"
+    },
+    {
+      "code": "113667.SH",
+      "announced_on": "2026-08-18",
+      "last_trade_date": "2026-08-25",
+      "stop_trading_date": "2026-08-26",
+      "conversion_end_date": "2026-08-28",
+      "redemption_date": "2026-08-31",
+      "redemption_payment_date": "2026-08-31",
+      "delisting_date": "2026-08-31",
+      "redemption_price": 100.686,
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://paper.cnstock.com/html/2026-08/18/content_2255877.htm"
+    },
+    {
+      "code": "118053.SH",
+      "announced_on": "2026-07-17",
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://paper.cnstock.com/html/2026-07/17/content_2245650.htm"
+    },
+    {
+      "code": "113658.SH",
+      "announced_on": "2026-07-16",
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://static.cninfo.com.cn/finalpage/2026-07-16/1225426566.PDF"
+    },
+    {
+      "code": "113697.SH",
+      "announced_on": "2026-08-06",
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://epaper.cs.com.cn/zgzqb/html/2026-08/06/nw.D110000zgzqb_20260806_1-A10.htm"
+    },
+    {
+      "code": "113667.SH",
+      "announced_on": "2026-08-08",
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://paper.cnstock.com/html/2026-08/08/content_2253218.htm"
+    },
+    {
+      "code": "127067.SZ",
+      "announced_on": "2026-08-18",
+      "redemption_kind": "forced_redemption",
+      "lifecycle_source": "https://static.cninfo.com.cn/finalpage/2026-08-18/1225478936.PDF"
     }
   ]
 }

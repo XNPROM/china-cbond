@@ -7,7 +7,7 @@ import argparse, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect
-from _lifecycle import filter_snapshot, snapshot_metadata, next_session
+from _lifecycle import POLICY_VERSION, filter_snapshot, snapshot_metadata, next_session
 
 
 _PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
@@ -148,7 +148,7 @@ def main():
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(
-        {"trade_date": args.trade_date, "execution_date": next_session(args.trade_date), "tradability_policy": 3, "count": len(items), "items": items, "tradability_exclusions": lifecycle_exclusions},
+        {"trade_date": args.trade_date, "execution_date": next_session(args.trade_date), "tradability_policy": POLICY_VERSION, "count": len(items), "items": items, "tradability_exclusions": lifecycle_exclusions},
         open(args.out, "w", encoding="utf-8"), ensure_ascii=False, indent=2
     )
     print(f"[done] {len(items)} records (trade_date={args.trade_date}) → {args.out}")

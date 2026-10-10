@@ -16,7 +16,7 @@ import argparse, json, os, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, upsert as db_upsert
-from _lifecycle import annotate, recommendation_reason, next_session
+from _lifecycle import POLICY_VERSION, annotate, recommendation_reason, next_session
 
 
 def _percentile(sorted_vals, pct):
@@ -81,11 +81,11 @@ def main():
     exclusions = [{"code": r["code"], "reason": r["recommendation_exclusion"]}
                   for r in items if not r["recommendation_eligible"]]
     items = [r for r in items if r["recommendation_eligible"]]
-    dataset.update(execution_date=execution_date, tradability_policy=3)
+    dataset.update(execution_date=execution_date, tradability_policy=POLICY_VERSION)
     with open(args.dataset, 'w', encoding='utf-8') as handle:
         json.dump(dataset, handle, ensure_ascii=False, indent=2)
     audit = {"trade_date": args.trade_date, "execution_date": execution_date,
-             "policy_version": 3, "excluded": exclusions}
+             "policy_version": POLICY_VERSION, "excluded": exclusions}
     with open(os.path.join(os.path.dirname(args.out), 'recommendation_audit.json'), 'w', encoding='utf-8') as handle:
         json.dump(audit, handle, ensure_ascii=False, indent=2)
 

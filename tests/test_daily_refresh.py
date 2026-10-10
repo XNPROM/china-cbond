@@ -13,7 +13,8 @@ from daily_refresh import _latest_universe_snapshot
     (1, '2026-07-13', False),
     (2, '2026-07-12', False),
     (2, '2026-07-13', False),
-    (3, '2026-07-13', True),
+    (3, '2026-07-13', False),
+    (4, '2026-07-13', True),
 ])
 def test_reuse_requires_listing_and_stop_date_policy(tmp_path, policy, checked, expected):
     from daily_refresh import _tradability_verified

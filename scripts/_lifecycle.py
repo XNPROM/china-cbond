@@ -6,7 +6,7 @@ from pathlib import Path
 from _auto_schedule import is_trading_day
 
 ROOT = Path(__file__).resolve().parent
-POLICY_VERSION = 3
+POLICY_VERSION = 4
 REVIEW_SESSIONS = 20
 
 
@@ -51,7 +51,7 @@ def lifecycle(item, asof):
     code = item['code']
     facts = {k: item.get(k) for k in ('last_trade_date', 'stop_trading_date',
              'conversion_end_date', 'redemption_date', 'delisting_date',
-             'redemption_price', 'redemption_payment_date', 'lifecycle_source', 'lifecycle_known_on')}
+             'redemption_price', 'redemption_payment_date', 'redemption_kind', 'lifecycle_source', 'lifecycle_known_on')}
     if facts.get('lifecycle_known_on') and facts['lifecycle_known_on'] > asof:
         facts = dict.fromkeys(facts)
     facts['conversion_end_date'] = facts['conversion_end_date'] or item.get('maturity')
@@ -60,10 +60,14 @@ def lifecycle(item, asof):
             and (not item.get('lifecycle_known_on') or item['lifecycle_known_on'] <= asof)):
         facts.update(stop_trading_date=explicit_stop, lifecycle_source='iFinD snapshot',
                      lifecycle_known_on=asof)
-    for event in events():
+    # Registry order is not disclosure order. Later implementations supersede
+    # earlier decisions without exposing their cash terms before publication.
+    for event in sorted(events(), key=lambda event: event['announced_on']):
         if event['code'] == code and event['announced_on'] <= asof:
+            known_on = facts.get('lifecycle_known_on')
             facts.update({k: v for k, v in event.items() if k not in ('code', 'announced_on')})
-            facts['lifecycle_known_on'] = event['announced_on']
+            # A sparse decision must not backdate inherited snapshot terms.
+            facts['lifecycle_known_on'] = max(known_on or event['announced_on'], event['announced_on'])
     for key in ('last_trade_date', 'stop_trading_date', 'conversion_end_date',
                 'redemption_date', 'redemption_payment_date', 'delisting_date'):
         facts[key] = iso_date(facts.get(key))
@@ -78,6 +82,21 @@ def lifecycle(item, asof):
                                    else previous_session(end))
         facts['estimated_stop_date'] = previous_session(previous_session(last_conversion_session))
     return facts
+
+
+def pricing_exclusion(item, asof):
+    """Terminal events cannot be valued as ordinary long-lived BS options.
+
+    A permanent stop in an archived iFinD observation is evidence of
+    incompatible terms, not a fabricated official conversion deadline.
+    """
+    facts = lifecycle(item, asof)
+    if facts.get('redemption_kind') == 'forced_redemption':
+        return 'forced_redemption_event'
+    stop = facts.get('stop_trading_date')
+    if stop and facts.get('redemption_kind') != 'maturity_redemption':
+        return 'unverified_redemption_terms'
+    return None
 
 
 def trade_status(item, day, asof=None):
@@ -114,6 +133,9 @@ def recommendation_reason(item, asof, execution_date=None):
     state = trade_status(item, execution_date, asof)
     if state != 'trading':
         return state
+    exclusion = pricing_exclusion(item, asof)
+    if exclusion:
+        return exclusion
     facts = lifecycle(item, asof)
     end = facts['conversion_end_date']
     if not end:
@@ -134,6 +156,7 @@ def recommendation_reason(item, asof, execution_date=None):
 
 def annotate(item, asof):
     item.update(lifecycle(item, asof))
+    item['pricing_exclusion'] = pricing_exclusion(item, asof)
     item['trade_status'] = trade_status(item, asof)
     item['execution_date'] = next_session(asof)
     item['recommendation_exclusion'] = recommendation_reason(item, asof, item['execution_date'])

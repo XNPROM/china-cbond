@@ -86,10 +86,10 @@ def valid_snapshot(tmp_path, monkeypatch):
         _db.upsert(con,'valuation_daily',[row],['trade_date','code'])
         con.execute("INSERT INTO themes(trade_date,code,business_rewrite) VALUES (?,?,'主营制造')",[date,code])
         con.execute("INSERT INTO strategy_picks(trade_date,code,strategy) VALUES (?,?,'双低')",[date,code])
-        items.append({'code':code,'name':'测试转债','latest':100.,'conv_prem':10.,'pure_prem':10.,'pure_bond_value':90.,'maturity_call_price':110.,'profile':'主营制造','vol_20d':30.,'relative_value':0.9,'conversion_end_date':'2030-01-01','model_version':'bs-hv-2','quote_date':date,'quote_volume':100})
+        items.append({'code':code,'name':'测试转债','latest':100.,'conv_prem':10.,'pure_prem':10.,'pure_bond_value':90.,'maturity_call_price':110.,'profile':'主营制造','vol_20d':30.,'relative_value':0.9,'conversion_end_date':'2030-01-01','model_version':'bs-hv-3','quote_date':date,'quote_volume':100})
     con.close()
     (tmp_path/'cbond_codes.txt').write_text('\n'.join(codes))
-    (tmp_path/'dataset.json').write_text(json.dumps({'trade_date':date,'count':2,'items':items,'tradability_policy':3,'execution_date':'2026-09-29'}))
+    (tmp_path/'dataset.json').write_text(json.dumps({'trade_date':date,'count':2,'items':items,'tradability_policy':4,'execution_date':'2026-09-29'}))
     (tmp_path/'quote_audit.json').write_text(json.dumps({'trade_date':date,'expected_count':2,'returned_count':2,'missing_count':0,'expected_codes':codes,'returned_codes':codes,'missing_codes':[],'blank_codes':[],'batch_errors':[],'quote_details':{c:{'quote_date':date,'volume':100} for c in codes}}))
     monkeypatch.setattr(validate_snapshot,'connect',lambda **kw:duckdb.connect(db,**kw))
     def validate():
@@ -100,6 +100,26 @@ def valid_snapshot(tmp_path, monkeypatch):
 def test_valid_snapshot_passes_without_relying_on_current_universe_count(valid_snapshot):
     _,_,validate=valid_snapshot
     assert validate()==0
+
+
+def test_terminal_row_with_old_ordinary_estimate_blocks_publication(valid_snapshot, capsys):
+    root,_,validate=valid_snapshot
+    path=root/'dataset.json';dataset=json.loads(path.read_text())
+    item=dataset['items'][0]
+    item.update(stop_trading_date='2026-10-05',lifecycle_known_on='2026-09-28',
+                pricing_exclusion='unverified_redemption_terms',bs_value=120.,bs_delta=.9)
+    path.write_text(json.dumps(dataset))
+    assert validate()!=0
+    assert 'terminal bond retains ordinary BS fields' in capsys.readouterr().out
+
+
+def test_old_valuation_model_blocks_publication_even_without_delta(valid_snapshot, capsys):
+    root,_,validate=valid_snapshot
+    path=root/'dataset.json';dataset=json.loads(path.read_text())
+    dataset['items'][0].update(model_version='bs-hv-2',bs_value=120.,bs_delta=None)
+    path.write_text(json.dumps(dataset))
+    assert validate()!=0
+    assert 'dataset uses obsolete pricing' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('damage',['missing_codes','missing_dataset','missing_audit','audit_error','audit_date','dataset_extra','price_nan','null_extra','failed_etl'])

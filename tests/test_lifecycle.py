@@ -99,7 +99,7 @@ def test_terminal_event_sells_on_last_actual_session(monkeypatch,honglu):
 
 def test_known_terminal_event_exit_and_sell_cost(monkeypatch,honglu):
     import backtest_weekly as bt
-    honglu.update(stop_trading_date='2026-09-29',last_trade_date='2026-09-28',lifecycle_known_on='2026-09-20')
+    honglu.update(stop_trading_date='2026-09-29',last_trade_date='2026-09-28',lifecycle_known_on='2026-09-20',redemption_kind='maturity_redemption')
     monkeypatch.setattr(bt,'snapshot_metadata',lambda day:{'128134.SZ':{**honglu, 'quote_date':day, 'quote_volume':100}})
     px={'128134.SZ':{'20260924':111,'20260928':110.053,'20260929':110.053,'20260930':110.053}}
     buy,sell,forced,audit=execution_prices(['128134.SZ'],px,'20260924','20260930','20260923')

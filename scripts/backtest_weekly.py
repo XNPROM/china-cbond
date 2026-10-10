@@ -19,8 +19,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, upsert as db_upsert
-from bs_pricing import bond_metrics
-from _lifecycle import snapshot_metadata, recommendation_reason, trade_status, lifecycle, iso_date
+from bs_pricing import MODEL_VERSION, bond_metrics
+from _lifecycle import POLICY_VERSION, snapshot_metadata, recommendation_reason, trade_status, lifecycle, iso_date
 
 try:
     from _ifind import basic_data, history, batched
@@ -1034,8 +1034,8 @@ def save_output(args, summary_info, end_ymd, strategies, use_eq_weight_bench, ho
         "slippage_bps": args.slippage_bps,
         "commission_bps": args.commission_bps,
         "sector_method": "delta",
-        "tradability_policy": 3,
-        "pricing_model": "bs-hv-2",
+        "tradability_policy": POLICY_VERSION,
+        "pricing_model": MODEL_VERSION,
         "execution_audit": getattr(args, "execution_audit", []),
         "source_provenance": "Historical archived membership and stock mappings; supplemental dated quotes only for execution. Some legacy lifecycle observations lack original announcement timestamps; current profiles may be cached. Not a certified point-in-time dataset.",
         "min_balance_yi": MIN_BALANCE_YI,

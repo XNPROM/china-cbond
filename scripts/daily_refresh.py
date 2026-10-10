@@ -22,6 +22,7 @@ import traceback
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
+from _lifecycle import POLICY_VERSION
 from _db import connect, upsert as db_upsert
 
 
@@ -188,7 +189,7 @@ def _universe_snapshot_for_date(cwd, snapshot_date):
 def _tradability_verified(snapshot):
     with open(snapshot[2], encoding='utf-8') as handle:
         payload = json.load(handle)
-    return payload.get('tradability_policy') == 3 and payload.get('tradability_checked_asof') == snapshot[0]
+    return payload.get('tradability_policy') == POLICY_VERSION and payload.get('tradability_checked_asof') == snapshot[0]
 
 
 def _latest_universe_snapshot(cwd, trade_date):

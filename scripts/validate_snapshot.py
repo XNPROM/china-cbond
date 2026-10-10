@@ -11,8 +11,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
+from bs_pricing import MODEL_VERSION
 from _db import connect
-from _lifecycle import trade_status, recommendation_reason, next_session
+from _lifecycle import POLICY_VERSION, trade_status, recommendation_reason, next_session, lifecycle, pricing_exclusion
 from _snapshot_policy import (VALUATION_CRITICAL, VALUATION_WARN, finite_number, null_limit)
 
 
@@ -235,7 +236,7 @@ def validate(trade_date, dataset_path="", strict=False, codes_path="", backtest_
     if dataset is not None:
         items = dataset.get("items", [])
         dataset_codes = {x.get("code") for x in items}
-        if dataset.get('tradability_policy') != 3:
+        if dataset.get('tradability_policy') != POLICY_VERSION:
             failures.append('dataset uses an obsolete tradability policy')
         if dataset.get('execution_date') != next_session(trade_date):
             failures.append('dataset execution date mismatch')
@@ -245,6 +246,17 @@ def validate(trade_date, dataset_path="", strict=False, codes_path="", backtest_
         except (OSError, ValueError, AttributeError):
             audited_quotes = {}
         for item in items:
+            exclusion = pricing_exclusion(item, trade_date)
+            fields = ('bs_value', 'relative_value', 'bs_delta', 'bs_gamma', 'bs_theta', 'bs_vega')
+            if item.get('pricing_exclusion') != exclusion:
+                failures.append(f"dataset pricing eligibility mismatch: {item['code']}")
+            if exclusion and any(item.get(field) is not None for field in fields):
+                failures.append(f"terminal bond retains ordinary BS fields: {item['code']}")
+            if any(item.get(field) is not None for field in fields) and item.get('model_version') != MODEL_VERSION:
+                failures.append(f"dataset uses obsolete pricing {item['code']}")
+            facts = lifecycle(item, trade_date)
+            if item.get('conversion_end_date') != facts['conversion_end_date']:
+                failures.append(f"dataset conversion deadline differs from dated terms: {item['code']}")
             volume = item.get('quote_volume')
             audited_volume = audited_quotes.get(item.get('code'), {}).get('volume')
             if (not finite_number(volume) or float(volume) < 0
@@ -259,7 +271,7 @@ def validate(trade_date, dataset_path="", strict=False, codes_path="", backtest_
                 reason = recommendation_reason(item, trade_date)
                 if reason:
                     failures.append(f"strategy contains ineligible bond {item['code']}: {reason}")
-                if item.get('model_version') != 'bs-hv-2' and item.get('bs_delta') is not None:
+                if item.get('model_version') != MODEL_VERSION and item.get('bs_delta') is not None:
                     failures.append(f"strategy uses obsolete pricing {item['code']}")
         dataset_bad_business = sum(1 for code, _ in theme_bad_rows if code in dataset_codes)
         print(f"  dataset: {len(items)} items ({dataset_path})")
@@ -306,7 +318,7 @@ def validate(trade_date, dataset_path="", strict=False, codes_path="", backtest_
             backtest = _load_dataset(backtest_path)
             if not backtest or not backtest.get("equity_curve"):
                 failures.append("backtest missing or empty")
-            elif backtest.get('tradability_policy') != 3 or backtest.get('pricing_model') != 'bs-hv-2':
+            elif backtest.get('tradability_policy') != POLICY_VERSION or backtest.get('pricing_model') != MODEL_VERSION:
                 failures.append('backtest uses obsolete trading/pricing policy')
             elif str(backtest.get("end_date", "")).replace("-", "") != trade_date.replace("-", ""):
                 failures.append("backtest end_date mismatch")

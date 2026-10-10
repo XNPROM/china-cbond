@@ -85,6 +85,10 @@ def _bond_status(row, trade_date):
       3. surplus_years≈0（兜底，避免 maturity_date 缺失） → 临近到期
       4. pure_bond_value 缺 → 纯债价值缺失，BS 不可得
     """
+    if row.get('pricing_exclusion') == 'forced_redemption_event':
+        return "已公告强赎：停止普通 BS 估值与常规推荐"
+    if row.get('pricing_exclusion') == 'unverified_redemption_terms':
+        return "赎回/终止条款待核验：停止普通 BS 估值与常规推荐"
     maturity = (row.get("maturity") or "").strip()  # YYYYMMDD
     if maturity and len(maturity) == 8:
         td_compact = trade_date.replace("-", "")
@@ -287,6 +291,8 @@ def main():
             reason_labels = {'unverified_last_trade_date':'临期日期待核验', 'unverified_stop_date':'停止日期待核验',
                              'stopped_trading':'执行日停止交易', 'delisted':'已摘牌', 'matured':'已到期',
                              'no_execution_liquidity':'当日无成交', 'stale_quote':'报价日期不符',
+                             'forced_redemption_event':'强赎事件，退出常规筛选',
+                             'unverified_redemption_terms':'赎回/终止条款待核验',
                              'missing_conversion_end_date':'到期日期待核验', 'temporarily_suspended':'暂停交易'}
             eligibility_text = reason_labels.get(row.get('recommendation_exclusion'), '可参与筛选')
             lines.append(
@@ -317,10 +323,10 @@ def main():
     lines.append("")
     lines.append("## 附录 · 字段说明")
     from _lifecycle import next_session
-    lines.append(f"- 推荐执行日：{next_session(args.trade_date)}；已停止交易及临期最后交易日未核实的债券不进入买入推荐。")
+    lines.append(f"- 推荐执行日：{next_session(args.trade_date)}；已公告强赎、赎回/终止条款待核验、已停止交易及临期最后交易日未核实的债券不进入常规买入推荐。")
     excluded = [x for x in dataset['items'] if x.get('recommendation_exclusion')]
     if excluded:
-        lines.append("- 推荐排除：" + "、".join(x['name'] for x in excluded) + "；生命周期日期待核实或执行日不可交易。")
+        lines.append("- 推荐排除：" + "、".join(x['name'] for x in excluded) + "；赎回事件、条款待核验或执行日不可交易。")
     if dataset.get('revision_note'):
         lines.append("- 修订说明：" + dataset['revision_note'])
     if dataset.get('revision_note'):
@@ -329,7 +335,7 @@ def main():
     lines.append("- 纯债溢价率：(转债价格 / 纯债价值 − 1) × 100%。")
     lines.append("- 20日年化波动率：过去 20 个交易日正股对数收益率标准差 × √252，显示为百分比。")
     lines.append("- 隐含波动率：直接取自 iFinD ths_implied_volatility_cbond；本项目未本地反算，供应商模型口径需查指标说明。")
-    lines.append("- 相对价值：市场价 / 历史波动率输入的简化 BS 理论价；未完整建模强赎、下修和回售，仅供筛选参考。")
+    lines.append("- 相对价值：市场价 / 历史波动率输入的简化 BS 理论价；已公告强赎及赎回/终止条款待核验的债券不输出普通 BS 估值、RV 与希腊字母；其他债券仍未完整建模下修和回售，仅供筛选参考。")
     lines.append("- Delta：简化 BS 模型对转股价值的敏感度（输入为正股20日历史波动率）；换算为每张债对正股股价的敏感度须乘100/转股价。")
     lines.append("- 模型期限：至转股结束日的实际日历天数/365；Theta按每天、Vega按波动率增加1个百分点计，Gamma相对于转股价值。")
     lines.append("- 纯债YTM：按纯债价值折算到期收益率。")

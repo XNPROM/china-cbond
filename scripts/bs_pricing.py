@@ -38,7 +38,7 @@ def _norm_pdf(x):
     return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
 
-MODEL_VERSION = 'bs-hv-2'
+MODEL_VERSION = 'bs-hv-3'
 
 
 def bs_call(S, K, sigma, r, T):
@@ -68,7 +68,12 @@ def bs_call(S, K, sigma, r, T):
 def bond_metrics(item, r=0.025, asof=None):
     """One percentage-unit model for reports and backtests; no invented inputs."""
     from datetime import date
-    from _lifecycle import iso_date
+    from _lifecycle import iso_date, lifecycle, pricing_exclusion
+    if asof and item.get('code'):
+        if pricing_exclusion(item, asof):
+            return None
+        # Resolve dated official terms here too: callers need not pre-annotate.
+        item = {**item, **lifecycle(item, asof)}
     price, premium, vol = item.get('latest'), item.get('conv_prem'), item.get('vol_20d')
     K = item.get('maturity_call_price')
     T = item.get('surplus_years')
@@ -106,6 +111,8 @@ def main():
     results = []
     priced = 0
     for it in items:
+        from _lifecycle import annotate
+        annotate(it, args.trade_date)
         metrics = bond_metrics(it, args.default_r, args.trade_date)
         if metrics is None or metrics['bs_value'] is None:
             for key in ('model_version', 'volatility_source', 'model_term_years', 'model_rate'):
