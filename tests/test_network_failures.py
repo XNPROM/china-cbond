@@ -63,3 +63,18 @@ def test_network_probe_does_not_log_proxy_credentials(monkeypatch, capsys):
     assert _network.probe_network() == 1
     output = capsys.readouterr().out
     assert 'DNS resolution' in output and 'secret' not in output
+
+
+def test_monthly_quota_failure_is_permanent_without_retries(monkeypatch):
+    calls=[]
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {'errorcode':-4318,'errmsg':'quota exhausted'}
+    class Session:
+        def post(self,*a,**k):calls.append(1);return Response()
+    monkeypatch.setattr(_ifind,'get_access_token',lambda:'fixture')
+    monkeypatch.setattr(_ifind,'_configure_session',lambda s:Session())
+    monkeypatch.setattr(_ifind,'_ROUTE_REPORTED',True)
+    with pytest.raises(RuntimeError,match='monthly data-pool quota exhausted'):
+        _ifind._post('data_pool',{},retries=3)
+    assert len(calls)==1

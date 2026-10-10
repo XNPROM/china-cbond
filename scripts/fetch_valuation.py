@@ -24,7 +24,7 @@ Usage:
       --date     YYYY-MM-DD \\
       --out      data/raw/asof=YYYY-MM-DD/valuation.csv
 """
-import argparse, csv, json, os, sys, time
+import argparse, csv, json, math, os, sys, time
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _ifind import basic_data, history, batched
@@ -33,7 +33,8 @@ from _db import connect, upsert as db_upsert
 
 def _f(v):
     try:
-        return float(v)
+        result = float(v)
+        return result if math.isfinite(result) else None
     except Exception:
         return None
 
@@ -71,6 +72,8 @@ def _load_existing_rows(path, expected_codes):
                     continue
                 row = {
                     "latest": source.get("最新价", "").strip(),
+                    "quote_date": source.get("行情日期", "").strip(),
+                    "quote_volume": source.get("成交量", "").strip(),
                     "change_pct": source.get("当日涨跌幅(%)", "").strip(),
                     "conv_prem": source.get("转股溢价率(%)", "").strip(),
                     "pure_prem": source.get("纯债溢价率(%)", "").strip(),
@@ -123,7 +126,12 @@ def _consume_quote_response(response, allowed_codes, rows, quote_codes, quote_bl
         change_pct = (table.get("changeRatio") or [None])[0]
         rows.setdefault(code, {})["latest"] = close
         rows.setdefault(code, {})["change_pct"] = change_pct
-        if _present(close):
+        from _lifecycle import iso_date
+        times = table_data.get('time') or response.get('time') or []
+        if times:
+            rows[code]['quote_date'] = iso_date(times[0])
+        rows[code]['quote_volume'] = (table.get('volume') or [None])[0]
+        if _f(close) is not None and _f(close) > 0:
             quote_codes.add(code)
         else:
             quote_blank_codes.add(code)
@@ -179,6 +187,15 @@ def main():
         "maturity_call_price",
     ]
     rows = _load_existing_rows(args.out, expected_codes) if args.reuse_existing else {}
+    if args.reuse_existing:
+        old_audit = os.path.join(os.path.dirname(args.out), 'quote_audit.json')
+        if os.path.isfile(old_audit):
+            saved_audit = json.load(open(old_audit, encoding='utf-8'))
+            if saved_audit.get('trade_date') == args.date:
+                for code, detail in saved_audit.get('quote_details', {}).items():
+                    if code in rows and detail.get('quote_date') == args.date:
+                        rows[code]['quote_date'] = detail['quote_date']
+                        rows[code]['quote_volume'] = detail.get('volume')
     if args.reuse_existing:
         print(f"[reuse] same-date valuation rows={len(rows)}/{len(codes)} from {args.out}")
 
@@ -273,7 +290,11 @@ def main():
     # threshold: one missing active bond must be visible and block publishing.
     quote_codes = {
         c for c in codes
-        if _present(rows.get(c, {}).get("latest"))
+        if _f(rows.get(c, {}).get("latest")) is not None
+        and _f(rows[c]["latest"]) > 0
+        and rows[c].get("quote_date") == args.date
+        and _f(rows[c].get("quote_volume")) is not None
+        and _f(rows[c]["quote_volume"]) >= 0
     }
     quote_blank_codes = set()
     quote_batch_errors = []
@@ -283,7 +304,7 @@ def main():
     print(f"[quote] request={len(quote_request_codes)} reuse={len(quote_codes)}")
     for b in batched(quote_request_codes, args.quote_batch_size):
         try:
-            r = history(b, "close,changeRatio", args.date, args.date)
+            r = history(b, "close,changeRatio,volume", args.date, args.date)
             _consume_quote_response(r, set(codes), rows, quote_codes, quote_blank_codes)
             quote_batches_ok += 1
         except Exception as e:
@@ -294,7 +315,7 @@ def main():
             fallback_errors = []
             for code in b:
                 try:
-                    single = history([code], "close,changeRatio", args.date, args.date)
+                    single = history([code], "close,changeRatio,volume", args.date, args.date)
                     _consume_quote_response(
                         single, {code}, rows, quote_codes, quote_blank_codes
                     )
@@ -329,6 +350,17 @@ def main():
         "batches_recovered": quote_batches_recovered,
         "batch_errors": quote_batch_errors,
     }
+    quote_audit['quote_details'] = {c: {'quote_date': rows.get(c, {}).get('quote_date') or None,
+            'volume': _f(rows.get(c, {}).get('quote_volume')),
+            'legacy_quote_without_metadata': not bool(rows.get(c, {}).get('quote_date'))} for c in codes}
+    wrong_dates = [c for c, detail in quote_audit['quote_details'].items()
+                   if detail['quote_date'] != args.date]
+    if wrong_dates:
+        quote_audit['batch_errors'].append({'reason':'stale_quote_date', 'codes':wrong_dates})
+    invalid_volumes = [c for c, detail in quote_audit["quote_details"].items()
+                       if detail["volume"] is None or detail["volume"] < 0]
+    if invalid_volumes:
+        quote_batch_errors.append({"reason": "invalid_quote_volume", "codes": invalid_volumes})
     audit_path = os.path.join(os.path.dirname(args.out), "quote_audit.json")
     _write_quote_audit(audit_path, quote_audit)
     print(
@@ -411,7 +443,7 @@ def main():
             "是否有下修条款", "下修触发比例(%)", "同花顺行业",
             "正股PE_TTM", "正股总市值(亿)", "隐含波动率(%)",
             "纯债YTM(%)", "iFinD双低", "期权价值", "剩余期限(天)", "剩余期限(年)",
-            "累计转股比例(%)", "转股稀释比例(%)", "纯债价值", "到期赎回价",
+            "累计转股比例(%)", "转股稀释比例(%)", "纯债价值", "到期赎回价", "行情日期", "成交量",
         ])
         for c in codes:
             r = rows.get(c, {})
@@ -435,7 +467,7 @@ def main():
                 r.get("option_value", ""), r.get("surplus_days", ""),
                 r.get("surplus_years", ""), r.get("accum_conv_ratio", ""),
                 r.get("dilution_ratio", ""),
-                r.get("pure_bond_value", ""), r.get("maturity_call_price", ""),
+                r.get("pure_bond_value", ""), r.get("maturity_call_price", ""), r.get("quote_date", ""), r.get("quote_volume", ""),
             ])
     print(f"[done] {len(rows)}/{len(codes)} rows → {args.out}")
 

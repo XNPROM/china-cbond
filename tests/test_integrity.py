@@ -86,11 +86,11 @@ def valid_snapshot(tmp_path, monkeypatch):
         _db.upsert(con,'valuation_daily',[row],['trade_date','code'])
         con.execute("INSERT INTO themes(trade_date,code,business_rewrite) VALUES (?,?,'主营制造')",[date,code])
         con.execute("INSERT INTO strategy_picks(trade_date,code,strategy) VALUES (?,?,'双低')",[date,code])
-        items.append({'code':code,'name':'测试转债','latest':100.,'conv_prem':10.,'pure_prem':10.,'pure_bond_value':90.,'maturity_call_price':110.,'profile':'主营制造','vol_20d':30.,'relative_value':0.9})
+        items.append({'code':code,'name':'测试转债','latest':100.,'conv_prem':10.,'pure_prem':10.,'pure_bond_value':90.,'maturity_call_price':110.,'profile':'主营制造','vol_20d':30.,'relative_value':0.9,'conversion_end_date':'2030-01-01','model_version':'bs-hv-2','quote_date':date,'quote_volume':100})
     con.close()
     (tmp_path/'cbond_codes.txt').write_text('\n'.join(codes))
-    (tmp_path/'dataset.json').write_text(json.dumps({'trade_date':date,'count':2,'items':items}))
-    (tmp_path/'quote_audit.json').write_text(json.dumps({'trade_date':date,'expected_count':2,'returned_count':2,'missing_count':0,'expected_codes':codes,'returned_codes':codes,'missing_codes':[],'blank_codes':[],'batch_errors':[]}))
+    (tmp_path/'dataset.json').write_text(json.dumps({'trade_date':date,'count':2,'items':items,'tradability_policy':3,'execution_date':'2026-09-29'}))
+    (tmp_path/'quote_audit.json').write_text(json.dumps({'trade_date':date,'expected_count':2,'returned_count':2,'missing_count':0,'expected_codes':codes,'returned_codes':codes,'missing_codes':[],'blank_codes':[],'batch_errors':[],'quote_details':{c:{'quote_date':date,'volume':100} for c in codes}}))
     monkeypatch.setattr(validate_snapshot,'connect',lambda **kw:duckdb.connect(db,**kw))
     def validate():
         return validate_snapshot.validate(date,str(tmp_path/'dataset.json'),strict=True,codes_path=str(tmp_path/'cbond_codes.txt'))
@@ -211,3 +211,80 @@ def test_markdown_preserves_delta_sector_boundaries(valid_snapshot, monkeypatch)
     build_overview_md.main()
     vm=build_dashboard_view_model(parse_markdown(output.read_text()),'2026-09-28',None)
     assert {i['bond_code']:i['sector'] for i in vm['explorer']['items']}=={'110075.SH':'平衡','110076.SH':'偏债'}
+
+
+def test_validator_rejects_non_trading_recommendation(valid_snapshot):
+    root, db, validate = valid_snapshot
+    path=root/'dataset.json'; data=json.loads(path.read_text())
+    data['items'][0].update(stop_trading_date='2026-09-28',lifecycle_source='test')
+    path.write_text(json.dumps(data))
+    assert validate()==1
+
+
+@pytest.mark.parametrize("stop,source,day,expected", [
+    ("2026-09-29", "same-date archived valuation", "2026-04-22", "5/30"),
+    ("2026-09-29", "https://official.example/notice", "2026-09-28", "停交日2026-09-29"),
+    ("2026-09-29", "https://official.example/notice", "2026-09-29", "停止交易"),
+])
+def test_stop_label_respects_report_date(stop, source, day, expected):
+    from build_overview_md import _call_status
+    assert _call_status({"redemp_stop_date":stop, "lifecycle_source":source,
+                         "call_trigger_days":5, "call_trigger_ratio":130},day)==expected
+
+
+@pytest.mark.parametrize("price", [float("nan"), float("inf"), -1, 0, ""])
+def test_quote_response_rejects_nonpositive_or_nonfinite_close(price):
+    from fetch_valuation import _consume_quote_response
+    code="128134.SZ"; rows={}; valid=set(); blank=set()
+    _consume_quote_response({"tables":[{"thscode":code,"time":["2026-09-28"],
+                            "table":{"close":[price],"volume":[100]}}]}, {code},rows,valid,blank)
+    assert valid==set() and blank=={code}
+
+
+@pytest.mark.parametrize('volume', [None, float('nan'), float('inf'), -1])
+def test_invalid_quote_volume_blocks_db_overwrite(tmp_path, monkeypatch, volume):
+    import fetch_valuation
+    code='128134.SZ'; codes=tmp_path/'codes.txt';codes.write_text(code)
+    universe=tmp_path/'universe.json';universe.write_text(json.dumps({'items':[{'code':code}]}))
+    monkeypatch.setattr(fetch_valuation.time,'sleep',lambda *args:None)
+    fields={'ths_conversion_premium_rate_cbond':10,'ths_pure_bond_premium_rate_cbond':10,
+            'ths_pure_bond_value_cbond':90,'ths_maturity_redemp_price_cbond':110}
+    monkeypatch.setattr(fetch_valuation,'basic_data',lambda *args:{'tables':[{'thscode':code,'table':{k:[v] for k,v in fields.items()}}]})
+    monkeypatch.setattr(fetch_valuation,'history',lambda *args:{'tables':[{'thscode':code,'time':['2026-09-28'],
+                         'table':{'close':[100],'changeRatio':[0],'volume':[volume]}}]})
+    monkeypatch.setattr(fetch_valuation,'connect',lambda:pytest.fail('invalid quote must not touch DB'))
+    output=tmp_path/'valuation.csv'
+    monkeypatch.setattr(sys,'argv',['fetch','--date','2026-09-28','--codes',str(codes),
+                                   '--universe',str(universe),'--out',str(output)])
+    with pytest.raises(RuntimeError,match='refusing to overwrite'):
+        fetch_valuation.main()
+    assert not output.exists()
+    audit=json.loads((tmp_path/'quote_audit.json').read_text())
+    assert audit['batch_errors']==[{'reason':'invalid_quote_volume','codes':[code]}]
+
+
+def test_report_model_term_uses_conversion_expiry_without_losing_legacy_parser():
+    from build_overview_md import _call_status
+    from render_markdown_parser import parse_markdown
+    from report_view_model import build_dashboard_view_model
+    assert _call_status({'stop_trading_date':'2026-09-29',
+        'lifecycle_source':'https://official.example/notice'},'2026-09-28')=='停交日2026-09-29'
+    text="""# 可转债概览 · 2026-09-28
+## 测试题材
+### 测试转债 (110075.SH)
+| 正股 | 价格 | 模型期限(年) | Delta |
+|---|---|---|---|
+| 测试 (600000.SH) | 100 | 0.0274 | 0.66 |
+**主营**：测试。
+"""
+    vm=build_dashboard_view_model(parse_markdown(text),'2026-09-28',None)
+    assert vm['explorer']['items'][0]['surplus_years']['value']==0.0274
+
+
+@pytest.mark.parametrize('volume', [None, float('nan'), -1, 0])
+def test_snapshot_volume_must_match_independent_audit(valid_snapshot, volume):
+    root,_,validate=valid_snapshot
+    path=root/'dataset.json';data=json.loads(path.read_text())
+    data['items'][0]['quote_volume']=volume
+    path.write_text(json.dumps(data))
+    assert validate()==1

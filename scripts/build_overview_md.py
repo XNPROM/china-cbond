@@ -47,11 +47,17 @@ def _fmt_date(yyyymmdd):
     return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:]}"
 
 
-def _call_status(row):
-    """强赎状态。已触发停牌 → '已强赎'；活跃条款 → 'N/30'；否则 '—'。"""
-    stop = row.get("redemp_stop_date")
-    if stop:
-        return "已强赎"
+def _call_status(row, trade_date=None):
+    """强赎状态。停交日已到 → '停止交易'；活跃条款 → 'N/30'；否则 '—'。"""
+    stop = row.get("stop_trading_date") or row.get("redemp_stop_date")
+    if stop and trade_date:
+        from _lifecycle import iso_date
+        if iso_date(stop) <= trade_date:
+            return '停止交易'
+        if str(row.get('lifecycle_source') or '').startswith('https://'):
+            return '停交日' + iso_date(stop)
+        # Legacy future static dates do not establish a historical announcement.
+
     days = row.get("call_trigger_days")
     ratio = row.get("call_trigger_ratio")
     if days is not None and ratio:
@@ -273,20 +279,25 @@ def main():
             lines.append("")
             lines.append(
                 "| 正股 | 行业 | 价格 | 涨跌幅 | 转股溢价率 | 纯债溢价率 | 20日年化σ | 隐含波动率 | "
-                "相对价值 | Delta | 纯债YTM | 剩余年限 | 强赎 | 下修 | 余额(亿) | 评级 | 到期 |"
+                "相对价值 | Delta | 纯债YTM | 模型期限(年) | 强赎 | 下修 | 余额(亿) | 评级 | 到期 | 次日筛选 |"
             )
             lines.append(
-                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
             )
+            reason_labels = {'unverified_last_trade_date':'临期日期待核验', 'unverified_stop_date':'停止日期待核验',
+                             'stopped_trading':'执行日停止交易', 'delisted':'已摘牌', 'matured':'已到期',
+                             'no_execution_liquidity':'当日无成交', 'stale_quote':'报价日期不符',
+                             'missing_conversion_end_date':'到期日期待核验', 'temporarily_suspended':'暂停交易'}
+            eligibility_text = reason_labels.get(row.get('recommendation_exclusion'), '可参与筛选')
             lines.append(
                 f"| {row['uname']} ({row['ucode']}) | {row.get('ths_industry') or row.get('industry','')} | "
                 f"{_fmt_num(row.get('latest'))} | {_fmt_signed_pct(row.get('day_chg'))} | "
                 f"{_fmt_pct(row.get('conv_prem'))} | {_fmt_pct(row.get('pure_prem'))} | "
                 f"{_fmt_vol(row.get('vol_20d'))} | {_fmt_pct(row.get('implied_vol'))} | "
                 f"{_fmt_rv(row.get('relative_value'))} | {_fmt_num(row.get('bs_delta'), 4)} | "
-                f"{_fmt_pct(row.get('pure_bond_ytm'))} | {_fmt_num(row.get('surplus_years'), 2)} | "
-                f"{_call_status(row)} | {_down_status(row)} | "
-                f"{_fmt_num(row.get('balance'))} | {row.get('rating','')} | {_fmt_date(row.get('maturity'))} |"
+                f"{_fmt_pct(row.get('pure_bond_ytm'))} | {_fmt_num(row.get('model_term_years'), 4)} | "
+                f"{_call_status(row, args.trade_date)} | {_down_status(row)} | "
+                f"{_fmt_num(row.get('balance'))} | {row.get('rating','')} | {_fmt_date(row.get('maturity'))} | {eligibility_text} |"
             )
             lines.append("")
             status_note = _bond_status(row, args.trade_date)
@@ -305,12 +316,22 @@ def main():
             lines.append("**题材**：" + " ".join(f"`#{theme_name}`" for theme_name in row.get("themes", [])))
     lines.append("")
     lines.append("## 附录 · 字段说明")
+    from _lifecycle import next_session
+    lines.append(f"- 推荐执行日：{next_session(args.trade_date)}；已停止交易及临期最后交易日未核实的债券不进入买入推荐。")
+    excluded = [x for x in dataset['items'] if x.get('recommendation_exclusion')]
+    if excluded:
+        lines.append("- 推荐排除：" + "、".join(x['name'] for x in excluded) + "；生命周期日期待核实或执行日不可交易。")
+    if dataset.get('revision_note'):
+        lines.append("- 修订说明：" + dataset['revision_note'])
+    if dataset.get('revision_note'):
+        lines.append("- 历史数据说明：本次修订沿用当日归档样本；部分停交日期缺少原公告时间，公司资料可能采用后续缓存，历史收益不属于完整时点认证结果。")
     lines.append("- 转股溢价率：(转债价格 / 转股价值 − 1) × 100%。")
     lines.append("- 纯债溢价率：(转债价格 / 纯债价值 − 1) × 100%。")
     lines.append("- 20日年化波动率：过去 20 个交易日正股对数收益率标准差 × √252，显示为百分比。")
-    lines.append("- 隐含波动率：iFinD 按 BS 模型由转债价格反推的正股波动率。")
-    lines.append("- 相对价值：市场价 / BS 理论价，<1 偏低估，>1 偏高估。")
-    lines.append("- Delta：BS 模型对正股价格的敏感度，0 ≈ 纯债性、1 ≈ 纯股性。")
+    lines.append("- 隐含波动率：直接取自 iFinD ths_implied_volatility_cbond；本项目未本地反算，供应商模型口径需查指标说明。")
+    lines.append("- 相对价值：市场价 / 历史波动率输入的简化 BS 理论价；未完整建模强赎、下修和回售，仅供筛选参考。")
+    lines.append("- Delta：简化 BS 模型对转股价值的敏感度（输入为正股20日历史波动率）；换算为每张债对正股股价的敏感度须乘100/转股价。")
+    lines.append("- 模型期限：至转股结束日的实际日历天数/365；Theta按每天、Vega按波动率增加1个百分点计，Gamma相对于转股价值。")
     lines.append("- 纯债YTM：按纯债价值折算到期收益率。")
     lines.append("- 时序：展示历史可得样本中的 Delta 与相对价值轨迹，供观察股性和估值漂移。")
     lines.append("- 强赎 `N/30 · X%`：若连续 N 个交易日正股收盘价触及转股价 × X%，即触发强制赎回。")

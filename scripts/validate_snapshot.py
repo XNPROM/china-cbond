@@ -12,6 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect
+from _lifecycle import trade_status, recommendation_reason, next_session
 from _snapshot_policy import (VALUATION_CRITICAL, VALUATION_WARN, finite_number, null_limit)
 
 
@@ -67,6 +68,15 @@ def _check_audit(path, trade_date, expected):
         for key in ("missing_codes", "blank_codes", "batch_errors"):
             if audit.get(key) != []:
                 errors.append(f"quote audit {key} is missing or non-empty")
+        details = audit.get('quote_details', {})
+        if set(details) != expected:
+            errors.append('quote metadata coverage mismatch')
+        for code in expected:
+            detail = details.get(code, {})
+            if detail.get('quote_date') != trade_date:
+                errors.append(f'quote observation date mismatch: {code}')
+            if not finite_number(detail.get('volume')) or float(detail['volume']) < 0:
+                errors.append(f'quote volume unavailable: {code}')
         if audit.get("missing_count") != 0:
             errors.append("quote audit missing_count is not zero")
         return errors
@@ -225,6 +235,32 @@ def validate(trade_date, dataset_path="", strict=False, codes_path="", backtest_
     if dataset is not None:
         items = dataset.get("items", [])
         dataset_codes = {x.get("code") for x in items}
+        if dataset.get('tradability_policy') != 3:
+            failures.append('dataset uses an obsolete tradability policy')
+        if dataset.get('execution_date') != next_session(trade_date):
+            failures.append('dataset execution date mismatch')
+        try:
+            with open(os.path.join(os.path.dirname(dataset_path), "quote_audit.json")) as handle:
+                audited_quotes = json.load(handle).get("quote_details", {})
+        except (OSError, ValueError, AttributeError):
+            audited_quotes = {}
+        for item in items:
+            volume = item.get('quote_volume')
+            audited_volume = audited_quotes.get(item.get('code'), {}).get('volume')
+            if (not finite_number(volume) or float(volume) < 0
+                    or not finite_number(audited_volume) or float(volume) != float(audited_volume)):
+                failures.append(f"dataset quote volume differs from audit: {item['code']}")
+            if item.get('quote_date') != trade_date:
+                failures.append(f"dataset quote date mismatch: {item['code']}")
+            state = trade_status(item, trade_date)
+            if state != 'trading':
+                failures.append(f"dataset contains non-trading bond {item['code']}: {state}")
+            if item['code'] in strategy_codes:
+                reason = recommendation_reason(item, trade_date)
+                if reason:
+                    failures.append(f"strategy contains ineligible bond {item['code']}: {reason}")
+                if item.get('model_version') != 'bs-hv-2' and item.get('bs_delta') is not None:
+                    failures.append(f"strategy uses obsolete pricing {item['code']}")
         dataset_bad_business = sum(1 for code, _ in theme_bad_rows if code in dataset_codes)
         print(f"  dataset: {len(items)} items ({dataset_path})")
         if dataset.get("trade_date") != trade_date:
@@ -270,6 +306,8 @@ def validate(trade_date, dataset_path="", strict=False, codes_path="", backtest_
             backtest = _load_dataset(backtest_path)
             if not backtest or not backtest.get("equity_curve"):
                 failures.append("backtest missing or empty")
+            elif backtest.get('tradability_policy') != 3 or backtest.get('pricing_model') != 'bs-hv-2':
+                failures.append('backtest uses obsolete trading/pricing policy')
             elif str(backtest.get("end_date", "")).replace("-", "") != trade_date.replace("-", ""):
                 failures.append("backtest end_date mismatch")
         except (OSError, ValueError) as exc:

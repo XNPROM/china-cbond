@@ -254,6 +254,7 @@
           </div>
         </div>
         <div class="bond-card-flags">
+          ${item.execution_eligibility && !item.recommendation_eligible ? `<span class="status-pill warn">${escapeHtml(item.execution_eligibility)}</span>` : ""}
           ${item.call_status.text ? `<span class="status-pill ${stateClass(item.call_status.state)}">&#9888; ${escapeHtml(item.call_status.text)}</span>` : '<span class="status-pill safe">&#10003; 未触发强赎</span>'}
           ${item.down_status.text ? `<span class="status-pill ${stateClass(item.down_status.state)}">&#8595; ${escapeHtml(item.down_status.text)}</span>` : ""}
           ${item.strategy ? `<span class="status-pill note">&#9733; ${escapeHtml(item.strategy)}</span>` : ""}
@@ -283,6 +284,7 @@
         <td>${escapeHtml(item.theme_group)}</td>
         <td>
           <div class="bond-card-flags">
+            ${item.execution_eligibility && !item.recommendation_eligible ? `<span class="status-pill warn">${escapeHtml(item.execution_eligibility)}</span>` : ""}
             ${item.call_status.text
               ? `<span class="status-pill ${stateClass(item.call_status.state)}">&#9888; ${escapeHtml(item.call_status.text)}</span>`
               : '<span class="status-pill safe">&#10003;</span>'}
@@ -405,7 +407,7 @@
             <dd>${escapeHtml(metricText(item.pure_bond_ytm))}</dd>
           </div>
           <div class="drawer-kv-row">
-            <dt>剩余年限</dt>
+            <dt>模型期限（年）</dt>
             <dd>${escapeHtml(metricText(item.surplus_years))}</dd>
           </div>
           <div class="drawer-kv-row">
@@ -426,6 +428,7 @@
               : '<span class="status-pill safe">&#10003; 未触发</span>'}</dd>
           </div>
           ${item.down_status.text ? `<div class="drawer-kv-row"><dt>下修</dt><dd><span class="status-pill ${stateClass(item.down_status.state)}">&#8595; ${escapeHtml(item.down_status.text)}</span></dd></div>` : ""}
+          ${item.execution_eligibility ? `<div class="drawer-kv-row"><dt>次日筛选</dt><dd>${escapeHtml(item.execution_eligibility)}</dd></div>` : ""}
           <div class="drawer-kv-row">
             <dt>评级</dt>
             <dd>${escapeHtml(item.rating || "--")}</dd>

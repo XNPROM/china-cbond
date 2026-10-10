@@ -48,7 +48,7 @@ def test_stop_date_check_keeps_null_and_excludes_confirmed_stop(monkeypatch):
     monkeypatch.setattr(module, 'basic_data', response)
     bonds = [{'code': '123258.SZ'}, {'code': '110075.SH'}]
     module._attach_stop_dates(bonds)
-    assert [b['code'] for b in module._filter_stopped_bonds(bonds, '20260930')[0]] == ['110075.SH']
+    assert [b['code'] for b in module._filter_stopped_bonds(bonds, max('20260930', bonds[0]['lifecycle_known_on'].replace('-', '')))[0]] == ['110075.SH']
 
 
 @pytest.mark.parametrize('tables', [[], [{'thscode': '110075.SH', 'table': {}}],

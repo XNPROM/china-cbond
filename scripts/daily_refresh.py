@@ -72,6 +72,23 @@ def _run_step(trade_date, step, cmd, cwd, required=True):
     return proc.returncode
 
 
+def _optional_backtest(trade_date, cmd, cwd, artifact, overview_md):
+    """Omit an unverifiable curve without retaining an older successful artifact."""
+    from pathlib import Path
+    path = Path(artifact)
+    path.unlink(missing_ok=True)
+    rc = _run_step(trade_date, "backtest_weekly", cmd, cwd, required=False)
+    if rc == 0 and path.is_file():
+        return True
+    path.unlink(missing_ok=True)
+    reason = (f"回测执行失败（退出码 {rc}），详见当日 ETL 日志"
+              if rc else "回测未生成对应日期的结果文件")
+    with open(overview_md, "a", encoding="utf-8") as handle:
+        handle.write("\n- 回测状态：" + reason + "；本日报告省略收益曲线。\n")
+    print("[backtest] unavailable: " + reason)
+    return False
+
+
 def _count_rows(trade_date, table):
     con = connect()
     try:
@@ -171,7 +188,7 @@ def _universe_snapshot_for_date(cwd, snapshot_date):
 def _tradability_verified(snapshot):
     with open(snapshot[2], encoding='utf-8') as handle:
         payload = json.load(handle)
-    return payload.get('tradability_policy') == 2 and payload.get('tradability_checked_asof') == snapshot[0]
+    return payload.get('tradability_policy') == 3 and payload.get('tradability_checked_asof') == snapshot[0]
 
 
 def _latest_universe_snapshot(cwd, trade_date):
@@ -261,6 +278,12 @@ def main():
         codes = os.path.join(raw_dir, "cbond_codes.txt")
         universe = os.path.join(raw_dir, "cbond_universe.json")
 
+    elif snapshot_date and _tradability_verified((snapshot_date, codes, universe)):
+        # A verified archive reuse is a successful universe step, not an API call.
+        started = _now()
+        _log_run(trade_date, "fetch_cb_universe", started, _now(), "ok",
+                 note=f"Reused verified local snapshot asof={snapshot_date}; no data-pool request")
+
     if not args.skip_profile:
         _run_step(trade_date, "refresh_underlying_profile", [
             PY, "scripts/fetch_underlying_profile.py",
@@ -333,18 +356,18 @@ def main():
         "--title-date", trade_date,
     ], cwd)
 
+    backtest_ready = False
     if not args.skip_backtest:
         from datetime import datetime, timedelta
         bt_end = trade_date
         bt_start = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=args.backtest_days)).strftime("%Y-%m-%d")
-        _run_step(trade_date, "backtest_weekly", [
+        backtest_ready = _optional_backtest(trade_date, [
             PY, "scripts/backtest_weekly.py",
             "--start-date", bt_start,
             "--end-date", bt_end,
             "--from-db",   # data is already in DB after valuation steps
-        ] + ([] if args.skip_valuation and args.skip_vol else ["--refresh-benchmark"]), cwd)
-        if not os.path.isfile(backtest_json):
-            raise RuntimeError("backtest succeeded without producing its dated artifact")
+        ] + ([] if args.skip_valuation and args.skip_vol else ["--refresh-benchmark"]),
+            cwd, backtest_json, overview_md)
 
     validate_cmd = [
         PY, "scripts/validate_snapshot.py",
@@ -353,7 +376,7 @@ def main():
         "--codes", codes,
     ]
     validate_cmd.append("--strict")
-    if not args.skip_backtest:
+    if backtest_ready:
         validate_cmd += ["--backtest", backtest_json]
     _run_step(trade_date, "validate_snapshot", validate_cmd, cwd)
 
@@ -364,7 +387,7 @@ def main():
         "--title", f"可转债概览 · {trade_date}",
         "--trade-date", trade_date,
     ]
-    if not args.skip_backtest and os.path.exists(backtest_json):
+    if backtest_ready:
         render_cmd += ["--backtest", backtest_json]
     render_cmd += ["--update-index"]
     _run_step(trade_date, "render_html", render_cmd, cwd)

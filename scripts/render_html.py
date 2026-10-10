@@ -65,6 +65,8 @@ def main():
 
     trade_date = derive_trade_date(report.get("title", ""), args.trade_date)
     backtest = load_backtest_payload(args.backtest)
+    if backtest and backtest.get("source_provenance"):
+        report["appendix"].append("回测来源限制：使用历史存档名单和当日行情；部分旧存续事件缺少首次公告时间，缺失的公司资料采用当前缓存，尚不能视为完整的时点数据库。")
     view_model = build_dashboard_view_model(report, trade_date, backtest)
 
     with open(os.path.join(SCRIPT_DIR, "static", "style.css"), encoding="utf-8") as handle:

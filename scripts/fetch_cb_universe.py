@@ -24,6 +24,7 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
+from _lifecycle import filter_snapshot, lifecycle, POLICY_VERSION
 from _db import connect, upsert as db_upsert
 from _ifind import basic_data, batched, history, ths_dr
 
@@ -82,6 +83,9 @@ def _attach_stop_dates(bonds):
                 except ValueError as exc:
                     raise RuntimeError(f'invalid stop-trading date for {code}') from exc
             by_code[code]['redemp_stop_date'] = normalized
+            if normalized:
+                by_code[code]['lifecycle_known_on'] = datetime.now().date().isoformat()
+                by_code[code]['lifecycle_source'] = 'iFinD stop-date observation'
             returned.add(code)
         if returned != set(batch):
             raise RuntimeError(f'stop-trading date coverage missing: {sorted(set(batch)-returned)}')
@@ -90,7 +94,8 @@ def _attach_stop_dates(bonds):
 def _filter_stopped_bonds(bonds, date_ymd):
     active, excluded = [], []
     for bond in bonds:
-        stop = _date_norm(bond.get('redemp_stop_date', ''))
+        asof = f'{date_ymd[:4]}-{date_ymd[4:6]}-{date_ymd[6:]}'
+        stop = _date_norm(lifecycle(bond, asof).get('stop_trading_date') or '')
         if stop and stop <= date_ymd:
             excluded.append({'code': bond['code'], 'name': bond.get('name', ''),
                              'redemp_stop_date': stop, 'reason': 'stopped_trading'})
@@ -417,13 +422,15 @@ def main():
         print(f"[filter] excluded {item['code']} {item['name']}: stopped trading on {item['redemp_stop_date']}")
 
     asof = f"{date_ymd[:4]}-{date_ymd[4:6]}-{date_ymd[6:]}"
+    bonds, lifecycle_exclusions = filter_snapshot(bonds, asof)
+    exclusions += lifecycle_exclusions
     base_dir = f"data/raw/asof={asof}"
 
     json_path = args.out_json or f"{base_dir}/cbond_universe.json"
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({"asof": asof, "count": len(bonds), "items": bonds,
-                   "tradability_policy": 2,
+                   "tradability_policy": POLICY_VERSION,
                    "tradability_checked_asof": asof if not args.reuse_existing else "",
                    "tradability_exclusions": listing_exclusions + exclusions},
                   f, ensure_ascii=False, indent=2)

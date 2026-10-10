@@ -42,6 +42,8 @@ def _post(path, body, retries=3, timeout=60):
             payload = response.json()
             if not isinstance(payload, dict):
                 raise ValueError("iFinD returned a non-object response")
+            if str(payload.get("errorcode", 0)) == "-4318":
+                raise RuntimeError("iFinD monthly data-pool quota exhausted (-4318); retries cannot restore quota")
             if str(payload.get("errorcode", 0)) != "0":
                 raise ValueError(f"iFinD error {payload.get('errorcode')}: {payload.get('errmsg', '')}")
             return payload

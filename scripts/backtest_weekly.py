@@ -8,6 +8,7 @@ Usage:
 import argparse
 import json
 import math
+from functools import lru_cache
 import os
 import sys
 import time
@@ -18,6 +19,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, upsert as db_upsert
+from bs_pricing import bond_metrics
+from _lifecycle import snapshot_metadata, recommendation_reason, trade_status, lifecycle, iso_date
 
 try:
     from _ifind import basic_data, history, batched
@@ -114,6 +117,8 @@ def fetch_day_fundamentals(codes, date_ymd, ucode_map=None, vol_db=None):
     cb_fields = [
         {"indicator": "ths_conversion_premium_rate_cbond", "indiparams": [date_param]},
         {"indicator": "ths_bond_balance_cbond", "indiparams": [date_param]},
+        {"indicator": "ths_pure_bond_value_cbond", "indiparams": [date_param]},
+        {"indicator": "ths_maturity_redemp_price_cbond", "indiparams": [""]},
     ]
     result = {}
     for batch_codes in batched(codes, 40):
@@ -128,6 +133,8 @@ def fetch_day_fundamentals(codes, date_ymd, ucode_map=None, vol_db=None):
                     result[code] = {
                         "conv_prem": conv_prem,
                         "balance": balance,
+                        "pure_bond_value": _safe_float(tbl.get("ths_pure_bond_value_cbond", []), 0),
+                        "maturity_call_price": _safe_float(tbl.get("ths_maturity_redemp_price_cbond", []), 0),
                         "pe_ttm": None,
                         "vol_20d": None,
                     }
@@ -160,115 +167,12 @@ def fetch_day_fundamentals(codes, date_ymd, ucode_map=None, vol_db=None):
     return result
 
 
-def _load_ucode_map():
-    """Build bond→ucode map from any available dataset.json (most stable)."""
-    import glob as _glob
-    paths = sorted(_glob.glob("data/raw/asof=????-??-??/dataset.json"))
-    for path in reversed(paths):
-        try:
-            ds = json.load(open(path, encoding="utf-8"))
-            m = {item["code"]: item.get("ucode", "") for item in ds.get("items", [])}
-            if m:
-                return m
-        except Exception:
-            pass
-    return {}
-
-
 def _load_vol_db():
     """Load vol_daily as {(ucode, date_iso): vol_20d_pct}."""
     con = connect()
     rows = con.execute("SELECT ucode, trade_date, vol_20d_pct FROM vol_daily").fetchall()
     con.close()
     return {(r[0], r[1]): r[2] for r in rows}
-
-
-def fetch_underlying_pe_bulk(code_to_ucode, start_ymd, end_ymd):
-    """Fetch PE_TTM for all underlying stocks via history(), return {ucode: {ymd: pe}}."""
-    ucodes = list(set(code_to_ucode.values()))
-    print(f"[fetch] pulling underlying stock PE for {len(ucodes)} stocks...")
-    pe_map = defaultdict(dict)
-    for batch_ucodes in batched(ucodes, 30):
-        try:
-            r = history(
-                batch_ucodes, "pe_ttm",
-                _ymd_to_dash(start_ymd), _ymd_to_dash(end_ymd),
-            )
-            for t in r.get("tables", []):
-                ucode = t.get("thscode", "")
-                tbl = t.get("table", {})
-                dates = t.get("time", [])
-                pe_vals = tbl.get("pe_ttm", [])
-                for i, d in enumerate(dates):
-                    if d and d != "-":
-                        ymd = d.replace("-", "")
-                        v = _safe_float(pe_vals, i)
-                        if v is not None and v > 0:
-                            pe_map[ucode][ymd] = v
-            time.sleep(0.12)
-        except Exception as e:
-            print(f"[warn] history pe_ttm batch: {e}")
-    total_pts = sum(len(v) for v in pe_map.values())
-    print(f"[PE] {total_pts} PE data points for {len(pe_map)} underlying stocks")
-    return pe_map
-
-
-def merge_pe_into_fundamentals(fundamentals, code_to_ucode, pe_map):
-    """Merge underlying stock PE into fundamentals dict (in-place)."""
-    n_merged = 0
-    for ymd, fund_map in fundamentals.items():
-        for code, f in fund_map.items():
-            ucode = code_to_ucode.get(code)
-            if ucode and ucode in pe_map:
-                pe = pe_map[ucode].get(ymd)
-                if pe is not None:
-                    f["pe_ttm"] = pe
-                    n_merged += 1
-    print(f"[PE] merged {n_merged} PE values into fundamentals")
-    return n_merged
-
-
-def compute_vol_from_prices(prices, trading_dates, rebalance_ymds, window=20):
-    """Compute annualized 20-day realized volatility from close prices."""
-    date_idx = {d: i for i, d in enumerate(trading_dates)}
-    vol_map = {}
-    for ymd in rebalance_ymds:
-        idx = date_idx.get(ymd)
-        if idx is None or idx < window:
-            vol_map[ymd] = {}
-            continue
-        window_dates = trading_dates[idx - window:idx + 1]
-        code_vols = {}
-        for code, px_dict in prices.items():
-            px_series = []
-            for d in window_dates:
-                p = px_dict.get(d)
-                if p and p > 0:
-                    px_series.append(p)
-            if len(px_series) < window // 2:
-                continue
-            log_rets = []
-            for i in range(1, len(px_series)):
-                log_rets.append(math.log(px_series[i] / px_series[i - 1]))
-            if len(log_rets) >= 5:
-                arr = np.array(log_rets)
-                vol_ann = float(np.std(arr, ddof=1) * math.sqrt(252) * 100)
-                code_vols[code] = vol_ann
-        vol_map[ymd] = code_vols
-    return vol_map
-
-
-def merge_vol_into_fundamentals(fundamentals, vol_map):
-    """Merge computed vol into fundamentals dict (in-place) where vol_20d is missing."""
-    n_merged = 0
-    for ymd, fund_map in fundamentals.items():
-        vols = vol_map.get(ymd, {})
-        for code, f in fund_map.items():
-            if (f.get("vol_20d") is None or f["vol_20d"] == 0) and code in vols:
-                f["vol_20d"] = vols[code]
-                n_merged += 1
-    print(f"[vol] merged {n_merged} computed vol values into fundamentals")
-    return n_merged
 
 
 def fetch_trading_dates_from_db(start_ymd, end_ymd):
@@ -280,6 +184,22 @@ def fetch_trading_dates_from_db(start_ymd, end_ymd):
     ).fetchall()
     con.close()
     return [r[0].replace("-", "") for r in rows]
+
+
+@lru_cache(maxsize=1)
+def execution_quote_cache():
+    path = os.path.join(os.path.dirname(__file__), '..', 'data', 'backtest_execution_quotes.json')
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as handle:
+        return json.load(handle).get('dates', {})
+
+
+def execution_evidence(day, code):
+    item = dict(snapshot_metadata(_ymd_to_dash(day)).get(code, {}))
+    if item.get('quote_date') != _ymd_to_dash(day):
+        item.update(execution_quote_cache().get(_ymd_to_dash(day), {}).get(code, {}))
+    return item
 
 
 def fetch_prices_from_db(trading_dates):
@@ -296,38 +216,32 @@ def fetch_prices_from_db(trading_dates):
     for code, td, px in rows:
         ymd = td.replace("-", "")
         prices[code][ymd] = px
+    for day in dates_fmt:
+        for code, row in execution_quote_cache().get(day, {}).items():
+            price = row.get('price')
+            if code in prices and isinstance(price, (int, float)) and math.isfinite(price) and price > 0:
+                prices[code].setdefault(day.replace('-', ''), price)
     return prices
 
 
 def fetch_fundamentals_from_db(rebalance_dates):
-    con = connect()
+    if not rebalance_dates:
+        return {}
+    con = connect(read_only=True)
     dates_fmt = [_ymd_to_dash(d) for d in rebalance_dates]
-    placeholders = ",".join(["?"] * len(dates_fmt))
-    rows = con.execute(
-        f"SELECT v.code, v.trade_date, v.conv_prem_pct, v.outstanding_yi, v.pe_ttm, "
-        f"  vd.vol_20d_pct, v.bs_delta, v.relative_value, v.surplus_years, v.maturity_call_price, "
-        f"  v.pure_bond_value "
-        f"FROM valuation_daily v "
-        f"LEFT JOIN universe u ON v.code = u.code "
-        f"LEFT JOIN vol_daily vd ON u.ucode = vd.ucode AND v.trade_date = vd.trade_date "
-        f"WHERE v.trade_date IN ({placeholders})",
-        dates_fmt
-    ).fetchall()
+    placeholders = ','.join(['?']*len(dates_fmt))
+    rows = con.execute(f"SELECT code,trade_date,conv_prem_pct,outstanding_yi,pe_ttm,bs_delta,relative_value,surplus_years,maturity_call_price,pure_bond_value,redemp_stop_date FROM valuation_daily WHERE trade_date IN ({placeholders})", dates_fmt).fetchall()
+    vols = {(td, uc): v for td, uc, v in con.execute(f"SELECT trade_date,ucode,vol_20d_pct FROM vol_daily WHERE trade_date IN ({placeholders})", dates_fmt).fetchall()}
     con.close()
     fundamentals = defaultdict(dict)
-    for code, td, conv_prem, balance, pe_ttm, vol_20d, bs_delta, rel_val, surplus_yr, mcp, pbv in rows:
-        ymd = td.replace("-", "")
-        fundamentals.setdefault(ymd, {})[code] = {
-            "conv_prem": conv_prem,
-            "balance": balance,
-            "pe_ttm": pe_ttm,
-            "vol_20d": vol_20d,
-            "bs_delta": bs_delta,
-            "relative_value": rel_val,
-            "surplus_years": surplus_yr,
-            "maturity_call_price": mcp,
-            "pure_bond_value": pbv,
-        }
+    for code,td,prem,bal,pe,delta,rv,term,strike,floor,stop in rows:
+        historical = snapshot_metadata(td).get(code, {})
+        fundamentals[td.replace('-', '')][code] = {
+            **historical, 'conv_prem':prem, 'balance':bal, 'pe_ttm':pe,
+            'vol_20d':vols.get((td,historical.get('ucode'))), 'bs_delta':delta,
+            'relative_value':rv, 'surplus_years':term, 'maturity_call_price':strike,
+            'pure_bond_value':floor, 'redemp_stop_date':historical.get('redemp_stop_date'),
+            'conversion_end_date':historical.get('conversion_end_date') or historical.get('maturity')}
     return fundamentals
 
 
@@ -381,48 +295,17 @@ from _snapshot_policy import classify_sector as classify_sector
 
 
 def _compute_bs_delta(price, conv_prem, vol_20d, surplus_years=None, maturity_call=None):
-    """Compute BS delta when bs_delta unavailable in DB."""
-    if price is None or conv_prem is None:
-        return None
-    if price <= 0 or conv_prem <= -90:
-        return None
-    S = price / (1.0 + conv_prem / 100.0)
-    K = maturity_call if maturity_call and maturity_call > 0 else 110.0
-    if vol_20d and vol_20d > 0:
-        sigma = vol_20d / 100.0 if vol_20d > 1.5 else vol_20d
-    else:
-        sigma = 0.25
-    T = surplus_years if surplus_years and surplus_years > 0.01 else 3.0
-    r = 0.025
-    sqrtT = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT)
-    return 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
+    result = bond_metrics({'latest':price, 'conv_prem':conv_prem, 'vol_20d':vol_20d,
+                           'surplus_years':surplus_years, 'maturity_call_price':maturity_call})
+    return result['bs_delta'] if result else None
 
 
 def _compute_relative_value(price, conv_prem, vol_20d, surplus_years=None,
-                             maturity_call=None, pure_bond_value=None):
-    """Compute relative_value = price / bs_value when not available in DB."""
-    if price is None or conv_prem is None or price <= 0:
-        return None
-    S = price / (1.0 + conv_prem / 100.0)
-    K = maturity_call if maturity_call and maturity_call > 0 else 110.0
-    if vol_20d and vol_20d > 0:
-        sigma = vol_20d / 100.0 if vol_20d > 1.5 else vol_20d
-    else:
-        sigma = 0.25
-    T = surplus_years if surplus_years and surplus_years > 0.01 else 3.0
-    r = 0.025
-    sqrtT = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT)
-    d2 = d1 - sigma * sqrtT
-    nd1 = 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
-    nd2 = 0.5 * (1 + math.erf(d2 / math.sqrt(2)))
-    call_value = S * nd1 - K * math.exp(-r * T) * nd2
-    pbv = pure_bond_value if pure_bond_value and pure_bond_value > 0 else K * math.exp(-r * T)
-    bs_value = pbv + call_value
-    if bs_value <= 0:
-        return None
-    return price / bs_value
+                            maturity_call=None, pure_bond_value=None):
+    result = bond_metrics({'latest':price, 'conv_prem':conv_prem, 'vol_20d':vol_20d,
+                           'surplus_years':surplus_years, 'maturity_call_price':maturity_call,
+                           'pure_bond_value':pure_bond_value})
+    return result['relative_value'] if result else None
 
 
 def _percentile(sorted_vals, pct):
@@ -558,7 +441,7 @@ class Portfolio:
         self.holdings = set()  # codes held entering this period
         self.equity = 1.0      # cumulative equity
 
-    def rebalance(self, picks, buy_px, sell_px):
+    def rebalance(self, picks, buy_px, sell_px, forced_exits=None, cash_exits=None):
         """Execute one rebalance cycle.
 
         Returns:
@@ -570,6 +453,11 @@ class Portfolio:
         if len(actual) < MIN_HOLDINGS:
             return None, 0, 0.0
 
+        unresolved = [c for c in actual if not sell_px.get(c) or sell_px[c] <= 0]
+        if unresolved:
+            raise ValueError('unresolved execution/settlement prices: ' + ','.join(unresolved))
+        forced_exits = set(forced_exits or ())
+        cash_exits = set(cash_exits or ())
         new_set = set(actual)
         prev_set = self.holdings
 
@@ -577,9 +465,11 @@ class Portfolio:
         for code in actual:
             pb = buy_px[code]
             ps = sell_px.get(code)
-            gross = (ps - pb) / pb if (ps and ps > 0) else 0.0
+            gross = (ps - pb) / pb
             cost = 0.0
             if code not in prev_set:
+                cost += self.one_way_cost
+            if code in forced_exits and code not in cash_exits:
                 cost += self.one_way_cost
             pos_returns.append(gross - cost)
 
@@ -596,7 +486,7 @@ class Portfolio:
         else:
             turnover = 1.0
 
-        self.holdings = new_set
+        self.holdings = new_set - forced_exits
         self.equity *= (1 + period_ret)
         self.equity = max(self.equity, 0.0)
 
@@ -653,72 +543,21 @@ def compute_risk_metrics(equity_series, n_trading_days):
 # ── Main backtest engine ─────────────────────────────────────────────
 
 def load_universe_codes(start_ymd, end_ymd):
-    """Load CB codes and underlying stock mapping from DB."""
-    con = connect()
-    start_dash = _ymd_to_dash(start_ymd)
-    end_dash = _ymd_to_dash(end_ymd)
-    try:
-        rows = con.execute(
-            "SELECT DISTINCT code FROM valuation_daily WHERE trade_date >= ? AND trade_date <= ?",
-            [start_dash, end_dash]
-        ).fetchall()
-        if len(rows) < 50:
-            raise RuntimeError("Too few historical codes")
-        codes = [r[0] for r in rows]
-        print(f"[universe] {len(codes)} codes from valuation_daily (historical)")
-    except Exception:
-        rows = con.execute("SELECT code FROM universe").fetchall()
-        codes = [r[0] for r in rows]
-        print(f"[universe] {len(codes)} codes from universe table (current snapshot)")
-
-    code_ucode_rows = con.execute("SELECT code, ucode FROM universe WHERE ucode IS NOT NULL").fetchall()
+    """Historical codes only; an empty archive must never become today's universe."""
+    con = connect(read_only=True)
+    rows = con.execute('SELECT DISTINCT code FROM valuation_daily WHERE trade_date BETWEEN ? AND ? ORDER BY code',
+                       [_ymd_to_dash(start_ymd), _ymd_to_dash(end_ymd)]).fetchall()
     con.close()
-    code_to_ucode = {r[0]: r[1] for r in code_ucode_rows}
-    print(f"[mapping] {len(code_to_ucode)} CB -> underlying stock mappings")
-    return codes, code_to_ucode
+    codes = [r[0] for r in rows]
+    metadata = snapshot_metadata(_ymd_to_dash(start_ymd))
+    mapping = {c:b['ucode'] for c,b in metadata.items() if b.get('ucode')}
+    print(f'[universe] {len(codes)} historical codes; {len(mapping)} start-date stock mappings')
+    return codes, mapping
 
 
 def load_universe_names_asof(rebalance_dates):
-    """Load underlying stock names from the latest snapshot on each date."""
-    import glob
-
-    snapshot_paths = {}
-    for path in glob.glob("data/raw/asof=????-??-??/dataset.json"):
-        snapshot_date = os.path.basename(os.path.dirname(path)).replace("asof=", "").replace("-", "")
-        if len(snapshot_date) == 8:
-            snapshot_paths[snapshot_date] = path
-
-    con = connect()
-    rows = con.execute("SELECT code, uname FROM universe").fetchall()
-    con.close()
-    current_names = {code: (uname or "") for code, uname in rows}
-
-    result = {}
-    fallback_dates = []
-    for rebalance_date in sorted(rebalance_dates):
-        eligible_dates = [d for d in snapshot_paths if d <= rebalance_date]
-        if not eligible_dates:
-            result[rebalance_date] = current_names
-            fallback_dates.append(rebalance_date)
-            continue
-        snapshot_date = max(eligible_dates)
-        try:
-            with open(snapshot_paths[snapshot_date], encoding="utf-8") as f:
-                dataset = json.load(f)
-            result[rebalance_date] = {
-                item.get("code"): (item.get("uname") or "")
-                for item in dataset.get("items", [])
-                if item.get("code")
-            }
-        except (OSError, ValueError, TypeError):
-            result[rebalance_date] = current_names
-            fallback_dates.append(rebalance_date)
-
-    if fallback_dates:
-        print(f"[st-filter] no historical snapshot for {len(fallback_dates)} dates; used current universe names")
-    else:
-        print(f"[st-filter] loaded historical underlying names for {len(result)} rebalance dates")
-    return result
+    return {td:{c:b.get('uname','') for c,b in snapshot_metadata(_ymd_to_dash(td)).items()}
+            for td in rebalance_dates}
 
 
 def load_prices_and_dates(args, codes, start_ymd, end_ymd):
@@ -809,25 +648,18 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
             n_vol = sum(1 for v in fund.values() if v.get("vol_20d") is not None)
             print(f"  {td}: {len(fund)} bonds, {n_cp} conv_prem, {n_pe} PE, {n_vol} vol")
 
-        if rebalance_date_list:
-            sample = fundamentals.get(rebalance_date_list[0], {})
-            n_complete = sum(1 for v in sample.values()
-                            if v.get("conv_prem") is not None
-                            and v.get("vol_20d") is not None)
-            if n_complete < 50:
-                print(f"[warn] Only {n_complete} bonds have complete fundamentals on {rebalance_date_list[0]}")
-                print("[vol] computing 20-day realized volatility from prices...")
-                vol_map = compute_vol_from_prices(prices, trading_dates, rebalance_ymds)
-                merge_vol_into_fundamentals(fundamentals, vol_map)
     else:
         print(f"[fetch] pulling fundamentals for {len(rebalance_date_list)} rebalance dates...")
         # Pre-load ucode map and vol DB for aligned PE/vol sourcing
-        ucode_map = _load_ucode_map() or {v: k for k, v in code_to_ucode.items() if v}
         vol_db = _load_vol_db()
-        fundamentals = {}
+        fundamentals = fetch_fundamentals_from_db(rebalance_date_list)
         for i, td in enumerate(rebalance_date_list):
-            fund = fetch_day_fundamentals(codes, td, ucode_map, vol_db)
-            fundamentals[td] = fund
+            metadata = snapshot_metadata(_ymd_to_dash(td))
+            ucode_map = {c:b.get('ucode') for c,b in metadata.items() if b.get('ucode')}
+            fetched = fetch_day_fundamentals([c for c in codes if c in metadata], td, ucode_map, vol_db)
+            fund = fundamentals.setdefault(td, {})
+            for code, row in fetched.items():
+                fund.setdefault(code, {}).update({k:v for k,v in row.items() if v is not None})
             n_pe = sum(1 for v in fund.values() if v.get("pe_ttm") is not None)
             n_vol = sum(1 for v in fund.values() if v.get("vol_20d") is not None)
             print(f"  [{i+1}/{len(rebalance_date_list)}] {td}: {len(fund)} conv_prem, {n_pe} PE, {n_vol} vol")
@@ -836,10 +668,6 @@ def load_fundamentals(args, codes, codes_set, code_to_ucode, trading_dates,
         n_px = persist_prices_to_db(prices, codes_set)
         n_fund = persist_fundamentals_to_db(fundamentals)
         print(f"[persist] wrote {n_px} price rows + {n_fund} fundamental rows to DB")
-
-        print("[vol] computing 20-day realized volatility from prices...")
-        vol_map = compute_vol_from_prices(prices, trading_dates, rebalance_ymds)
-        merge_vol_into_fundamentals(fundamentals, vol_map)
 
         pe_persist_count = 0
         pe_con = connect()
@@ -914,36 +742,95 @@ def load_benchmark(start_ymd, end_ymd, trading_dates, allow_fetch=True):
 
 
 def build_day_bonds(prices, fund, td_select):
-    """Build bond snapshot list for a single rebalance date."""
     day_bonds = []
+    asof = _ymd_to_dash(td_select)
+    metadata = snapshot_metadata(asof)
     for code in prices:
         px = prices[code].get(td_select)
         if not px:
             continue
-        f = fund.get(code, {})
-        raw_delta = f.get("bs_delta")
-        if raw_delta is None:
-            raw_delta = _compute_bs_delta(
-                px, f.get("conv_prem"), f.get("vol_20d"),
-                f.get("surplus_years"), f.get("maturity_call_price"))
-        rv = f.get("relative_value")
-        if rv is None:
-            rv = _compute_relative_value(
-                px, f.get("conv_prem"), f.get("vol_20d"),
-                f.get("surplus_years"), f.get("maturity_call_price"),
-                f.get("pure_bond_value"))
-        day_bonds.append({
-            "code": code,
-            "price": px,
-            "conv_prem": f.get("conv_prem"),
-            "balance": f.get("balance"),
-            "uname": f.get("uname", ""),
-            "pe_ttm": f.get("pe_ttm"),
-            "vol_20d": f.get("vol_20d"),
-            "delta": raw_delta,
-            "relative_value": rv,
-        })
+        f = {**metadata.get(code, {}), **fund.get(code, {}), 'code':code, 'latest':px}
+        if not f.get('conversion_end_date'):
+            f['conversion_end_date'] = metadata.get(code, {}).get('maturity')
+        metrics = bond_metrics(f, asof=asof)
+        day_bonds.append({**f, 'price':px, 'uname':f.get('uname', ''),
+                          'delta':metrics['bs_delta'] if metrics else None,
+                          'relative_value':metrics['relative_value'] if metrics else None})
     return day_bonds
+
+
+def execution_prices(codes, prices, buy_day, sell_day, signal_day):
+    """Exit announced terminal events at a verified last-session close; no stale fills."""
+    buy, sell, forced, audit = {}, {}, set(), []
+    metadata = snapshot_metadata(_ymd_to_dash(signal_day))
+    for code in codes:
+        item = {**metadata.get(code, {}), 'code':code}
+        if recommendation_reason(item, _ymd_to_dash(signal_day), _ymd_to_dash(buy_day)):
+            continue
+        if trade_status(item, _ymd_to_dash(buy_day), _ymd_to_dash(buy_day)) != 'trading':
+            continue
+        buy_evidence = execution_evidence(buy_day, code)
+        volume = buy_evidence.get('quote_volume')
+        if (buy_evidence.get('quote_date') != _ymd_to_dash(buy_day)
+                or not isinstance(volume, (int, float)) or not math.isfinite(volume) or volume <= 0):
+            audit.append({'code':code, 'reason':'buy_not_executable', 'exit_date':buy_day})
+            continue
+        pb = prices.get(code, {}).get(buy_day)
+        if not pb or pb <= 0:
+            continue
+        buy[code] = pb
+        exit_day = sell_day
+        # Refresh lifecycle using only each historical day's observations.
+        for day in sorted(d for d in prices[code] if buy_day <= d <= sell_day):
+            dated = {**snapshot_metadata(_ymd_to_dash(day)).get(code, item), 'code':code}
+            facts = lifecycle(dated, _ymd_to_dash(day))
+            last = facts.get('last_trade_date')
+            if not last and facts.get('estimated_stop_date'):
+                from _lifecycle import previous_session
+                last = previous_session(facts['estimated_stop_date'])
+            if (last and _ymd_to_dash(day) <= last
+                    and (not facts.get('lifecycle_known_on') or facts['lifecycle_known_on'] <= last)
+                    and buy_day <= last.replace('-', '') < sell_day):
+                exit_day = last.replace('-', '')
+                forced.add(code)
+                break
+        exit_evidence = execution_evidence(exit_day, code)
+        dated_exit = {**item, **exit_evidence, 'code':code}
+        ps = prices[code].get(exit_day)
+        reason = None
+        if trade_status(dated_exit, _ymd_to_dash(exit_day), _ymd_to_dash(exit_day)) != 'trading':
+            reason = 'exit_not_tradable'
+        elif exit_evidence.get('quote_volume') == 0:
+            reason = 'zero_volume_exit'
+        elif (exit_evidence.get('quote_date') != _ymd_to_dash(exit_day)
+                or not isinstance(exit_evidence.get('quote_volume'), (int, float))
+                or not math.isfinite(exit_evidence['quote_volume']) or exit_evidence['quote_volume'] < 0):
+            reason = 'unverified_exit_quote'
+        elif not ps or ps <= 0:
+            reason = 'missing_exit_price'
+        if reason:
+            # An observed quote after trading ceased is never a fill. Only an
+            # evidenced payment that actually falls in this period can settle it.
+            facts = lifecycle(dated_exit, _ymd_to_dash(sell_day))
+            payment = facts.get('redemption_payment_date')
+            amount = facts.get('redemption_price')
+            source = str(facts.get('lifecycle_source') or '')
+            known = facts.get('lifecycle_known_on')
+            if (payment and buy_day <= payment.replace('-', '') <= sell_day
+                    and known and known <= payment and source.startswith('https://')
+                    and isinstance(amount, (int, float)) and math.isfinite(amount) and amount > 0):
+                sell[code] = amount
+                forced.add(code)
+                audit.append({'code':code, 'reason':'cash_redemption',
+                              'exit_date':payment.replace('-', ''), 'amount':amount,
+                              'price_basis':'pretax_per_100_face', 'source':source})
+            else:
+                audit.append({'code':code, 'reason':reason, 'exit_date':exit_day})
+            continue
+        sell[code] = ps
+        if code in forced:
+            audit.append({'code':code,'reason':'terminal_event_exit','exit_date':exit_day})
+    return buy, sell, forced, audit
 
 
 def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
@@ -965,6 +852,7 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
     equity_history = {k: [1.0] for k in STRATEGIES}
     equity_history["bench"] = [1.0]
     turnover_history = {k: [] for k in STRATEGIES}
+    args.execution_audit = []
 
     if rebalance_indices and not use_eq_weight_bench:
         bench_base = bench_prices.get(trading_dates[rebalance_indices[0] + 1])
@@ -979,7 +867,7 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
 
         fund = fundamentals.get(td_select, {})
         day_bonds = build_day_bonds(prices, fund, td_select)
-        filtered = filter_universe(day_bonds)
+        filtered = filter_universe([b for b in day_bonds if not recommendation_reason(b, _ymd_to_dash(td_select), _ymd_to_dash(td_buy))])
 
         dl_codes = select_double_low(filtered, top_n=args.top)
         sn_picks = select_sector_neutral(filtered, per_sector=args.top)
@@ -993,14 +881,19 @@ def run_backtest_loop(args, trading_dates, rebalance_indices, holding,
             "rv": rv_codes,
         }
 
-        buy_px = {code: prices[code].get(td_buy) for code in prices if td_buy in prices[code]}
-        sell_px = {code: prices[code].get(td_sell) for code in prices if td_sell in prices[code]}
+        selected_codes = set(code for picks in pick_map.values() for code in picks)
+        buy_px, sell_px, forced_exits, execution_audit = execution_prices(list(prices), prices, td_buy, td_sell, td_select)
+        args.execution_audit.extend({'signal_date':td_select, 'selected':row['code'] in selected_codes, **row} for row in execution_audit)
+        unresolved = [row for row in execution_audit if row['reason'] not in ('terminal_event_exit', 'cash_redemption', 'buy_not_executable') and row['code'] in selected_codes]
+        if unresolved:
+            raise ValueError(f'backtest cannot value executable exits: {unresolved}')
 
         ret = {}
         n_held = {}
         any_valid = False
         for k in STRATEGIES:
-            r_val, n_val, turnover = portfolios[k].rebalance(pick_map[k], buy_px, sell_px)
+            r_val, n_val, turnover = portfolios[k].rebalance(pick_map[k], buy_px, sell_px, forced_exits,
+                {row['code'] for row in execution_audit if row['reason']=='cash_redemption'})
             ret[k] = r_val
             n_held[k] = n_val
             if r_val is not None:
@@ -1141,6 +1034,10 @@ def save_output(args, summary_info, end_ymd, strategies, use_eq_weight_bench, ho
         "slippage_bps": args.slippage_bps,
         "commission_bps": args.commission_bps,
         "sector_method": "delta",
+        "tradability_policy": 3,
+        "pricing_model": "bs-hv-2",
+        "execution_audit": getattr(args, "execution_audit", []),
+        "source_provenance": "Historical archived membership and stock mappings; supplemental dated quotes only for execution. Some legacy lifecycle observations lack original announcement timestamps; current profiles may be cached. Not a certified point-in-time dataset.",
         "min_balance_yi": MIN_BALANCE_YI,
         "max_price": MAX_PRICE,
         "exclude_st": True,
@@ -1205,6 +1102,9 @@ def main():
         raise SystemExit(1)
 
     rebalance_indices, holding = compute_rebalance_schedule(args, trading_dates, start_ymd, end_ymd)
+    if not rebalance_indices:
+        print("[error] insufficient sessions for a signal, T+1 entry and subsequent valuation")
+        raise SystemExit(1)
     rebalance_ymds = set(trading_dates[i] for i in rebalance_indices)
 
     fundamentals = load_fundamentals(

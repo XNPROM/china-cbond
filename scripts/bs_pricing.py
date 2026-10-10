@@ -13,7 +13,8 @@ Inputs (from dataset.json):
   - latest: bond price
   - conv_prem: conversion premium rate (%)
   - vol_20d: 20-day annualized volatility (percentage, e.g. 34.52 means 34.52%)
-  - surplus_years: remaining term (years)
+  - conversion_end_date: actual option expiry; term computed from report date
+  - surplus_years: fallback remaining term only when no expiry date is provided
   - pure_bond_value: pure bond value from iFinD
   - maturity_call_price: maturity redemption price from iFinD
 
@@ -30,34 +31,66 @@ from _snapshot_policy import finite_number
 
 
 def _norm_cdf(x):
-    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+    return 0.5 * math.erfc(-x / math.sqrt(2))
 
 
 def _norm_pdf(x):
     return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
 
-def bs_call(S, K, sigma, r, T):
-    if T <= 0.01 or sigma <= 0 or S <= 0 or K <= 0:
-        return max(S - K, 0), 0.0, 0.0, 0.0, 0.0
+MODEL_VERSION = 'bs-hv-2'
 
+
+def bs_call(S, K, sigma, r, T):
+    if not all(finite_number(x) for x in (S, K, sigma, r, T)):
+        raise ValueError('non-finite option input')
+    if S < 0 or K <= 0 or sigma < 0 or T < 0:
+        raise ValueError('invalid option input')
+    if S == 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+    if T == 0:
+        delta = 1.0 if S > K else (0.0 if S < K else None)
+        return max(S-K, 0.0), delta, None, None, 0.0
+    KrT = K * math.exp(-r*T)
+    if sigma == 0:
+        itm = S > KrT
+        delta = 1.0 if itm else (0.0 if S < KrT else None)
+        return max(S-KrT, 0.0), delta, (0.0 if delta is not None else None), (-r*KrT/365 if itm else (0.0 if delta is not None else None)), (0.0 if delta is not None else S*math.sqrt(T)*_norm_pdf(0)/100)
     sqrtT = math.sqrt(T)
     d = sigma * sqrtT
-    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / d
-    d2 = d1 - d
+    d1 = (math.log(S/K) + (r + 0.5*sigma*sigma)*T) / d
+    d2 = d1-d
+    Nd1, Nd2, nd1 = _norm_cdf(d1), _norm_cdf(d2), _norm_pdf(d1)
+    call = max(0.0, S*Nd1 - KrT*Nd2)
+    return call, Nd1, nd1/(S*d), (-sigma*S*nd1/(2*sqrtT)-r*KrT*Nd2)/365, S*sqrtT*nd1/100
 
-    Nd1 = _norm_cdf(d1)
-    Nd2 = _norm_cdf(d2)
-    nd1 = _norm_pdf(d1)
-    KrT = K * math.exp(-r * T)
 
-    call = S * Nd1 - KrT * Nd2
-    delta = Nd1
-    gamma = nd1 / (S * d)
-    vega = S * sqrtT * nd1 / 100  # per 1% vol change
-    theta = (-sigma * S * nd1 / (2 * sqrtT) - r * KrT * Nd2) / 365  # per day
-
-    return call, delta, gamma, theta, vega
+def bond_metrics(item, r=0.025, asof=None):
+    """One percentage-unit model for reports and backtests; no invented inputs."""
+    from datetime import date
+    from _lifecycle import iso_date
+    price, premium, vol = item.get('latest'), item.get('conv_prem'), item.get('vol_20d')
+    K = item.get('maturity_call_price')
+    T = item.get('surplus_years')
+    end = item.get('conversion_end_date')
+    if end and asof:
+        T = (date.fromisoformat(iso_date(end))-date.fromisoformat(iso_date(asof))).days/365
+    inputs = (price, premium, vol, K, T, r)
+    if not all(finite_number(v) for v in inputs):
+        return None
+    price, premium, vol, K, T, r = map(float, inputs)
+    if price <= 0 or premium <= -100 or vol < 0 or K <= 0 or T < 0:
+        return None
+    try:
+        call, delta, gamma, theta, vega = bs_call(price/(1+premium/100), K, vol/100, r, T)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+    floor = item.get('pure_bond_value')
+    total = call+float(floor) if finite_number(floor) and float(floor) > 0 else None
+    return {'bs_value': total, 'relative_value': price/total if total and total > 0 else None,
+            'bs_delta': delta, 'bs_gamma': gamma, 'bs_theta': theta, 'bs_vega': vega,
+            'model_version': MODEL_VERSION, 'volatility_source': 'stock_historical_20d',
+            'model_term_years': T, 'model_rate': r}
 
 
 def main():
@@ -73,67 +106,16 @@ def main():
     results = []
     priced = 0
     for it in items:
-        price = it.get("latest")
-        conv_prem = it.get("conv_prem")
-        vol_20d = it.get("vol_20d")
-        surplus_years = it.get("surplus_years")
-        pure_bond_val = it.get("pure_bond_value")
-        maturity_call = it.get("maturity_call_price")
-
-        if not all(finite_number(v) for v in [price, conv_prem, vol_20d]):
+        metrics = bond_metrics(it, args.default_r, args.trade_date)
+        if metrics is None or metrics['bs_value'] is None:
+            for key in ('model_version', 'volatility_source', 'model_term_years', 'model_rate'):
+                it[key] = None
             results.append(None)
             continue
-        if price <= 0 or conv_prem <= -90 or vol_20d <= 0:
-            results.append(None)
-            continue
-
-        # Conversion value S
-        # conv_prem = (price / conv_value - 1) * 100
-        # So conv_value = price / (1 + conv_prem / 100)
-        S = price / (1 + conv_prem / 100)
-
-        # Strike: use actual maturity call price if available, else 110
-        K = maturity_call if maturity_call and maturity_call > 0 else 110.0
-
-        # Volatility: vol_20d is stored as percentage (e.g. 34.52 = 34.52%),
-        # convert to decimal for BS formula.
-        sigma = vol_20d / 100.0
-
-        # Discount rate: use risk-free rate (CGB 5Y or default 2.5%).
-        # Do NOT use YTM — it includes credit spread, violating BS risk-free assumption.
-        r = args.default_r
-
-        # Time to maturity
-        T = surplus_years if surplus_years and surplus_years > 0.01 else 2.0
-
-        try:
-            option_val, delta, gamma, theta, vega = bs_call(S, K, sigma, r, T)
-        except (ValueError, ZeroDivisionError, OverflowError):
-            results.append(None)
-            continue
-
-        # Pure bond value: use iFinD value if available.
-        # If unavailable, skip this bond — K*exp(-rT) ignores coupons
-        # and credit spread, producing unreliable bs_value.
-        if finite_number(pure_bond_val) and pure_bond_val > 0:
-            pbv = pure_bond_val
-        else:
-            results.append(None)
-            continue
-
-        total_val = option_val + pbv
-        rel_val = price / total_val if total_val > 0 else None
-
-        results.append({
-            "trade_date": args.trade_date,
-            "code": it["code"],
-            "bs_value": round(total_val, 2),
-            "relative_value": round(rel_val, 4) if rel_val else None,
-            "bs_delta": round(delta, 4),
-            "bs_gamma": round(gamma, 4),
-            "bs_theta": round(theta, 4),
-            "bs_vega": round(vega, 4),
-        })
+        results.append({'trade_date': args.trade_date, 'code': it['code'],
+                        **{k: round(metrics[k], 2 if k == 'bs_value' else 4) if metrics[k] is not None else None
+                           for k in ('bs_value', 'relative_value', 'bs_delta', 'bs_gamma', 'bs_theta', 'bs_vega')}})
+        it.update({k: metrics[k] for k in ('model_version', 'volatility_source', 'model_term_years', 'model_rate')})
         priced += 1
 
     bs_fields = ("bs_value", "relative_value", "bs_delta", "bs_gamma", "bs_theta", "bs_vega")

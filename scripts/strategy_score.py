@@ -16,6 +16,7 @@ import argparse, json, os, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect, upsert as db_upsert
+from _lifecycle import annotate, recommendation_reason, next_session
 
 
 def _percentile(sorted_vals, pct):
@@ -75,7 +76,18 @@ def main():
     args = ap.parse_args()
 
     dataset = json.load(open(args.dataset, encoding="utf-8"))
-    items = dataset["items"]
+    items = [annotate(r, args.trade_date) for r in dataset["items"]]
+    execution_date = next_session(args.trade_date)
+    exclusions = [{"code": r["code"], "reason": r["recommendation_exclusion"]}
+                  for r in items if not r["recommendation_eligible"]]
+    items = [r for r in items if r["recommendation_eligible"]]
+    dataset.update(execution_date=execution_date, tradability_policy=3)
+    with open(args.dataset, 'w', encoding='utf-8') as handle:
+        json.dump(dataset, handle, ensure_ascii=False, indent=2)
+    audit = {"trade_date": args.trade_date, "execution_date": execution_date,
+             "policy_version": 3, "excluded": exclusions}
+    with open(os.path.join(os.path.dirname(args.out), 'recommendation_audit.json'), 'w', encoding='utf-8') as handle:
+        json.dump(audit, handle, ensure_ascii=False, indent=2)
 
     # Filter: PE > 0, vol_20d present
     candidates = [
@@ -158,6 +170,8 @@ def main():
 
     # Merge and write
     all_picks = vanilla_top + sector_picks + rv_picks
+    for row in all_picks:
+        row.update(signal_date=args.trade_date, execution_date=execution_date)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         for row in all_picks:

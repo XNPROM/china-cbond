@@ -7,6 +7,7 @@ import argparse, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _db import connect
+from _lifecycle import filter_snapshot, snapshot_metadata, next_session
 
 
 _PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
@@ -14,7 +15,7 @@ _PRIVATE_CB_RE = re.compile(r"(定转|定\d+)")
 
 QUERY = """
 SELECT
-  u.code, u.name, u.ucode, u.uname,
+  v.code, u.name, u.ucode, u.uname,
   v.price          AS latest,
   v.change_pct     AS day_chg,
   v.outstanding_yi AS balance,
@@ -36,7 +37,7 @@ SELECT
   v.total_mv_yi,
   COALESCE(v.pure_bond_ytm, (
     SELECT v2.pure_bond_ytm FROM valuation_daily v2
-    WHERE v2.code = u.code AND v2.trade_date < ? AND v2.pure_bond_ytm IS NOT NULL
+    WHERE v2.code = v.code AND v2.trade_date < ? AND v2.pure_bond_ytm IS NOT NULL
     ORDER BY v2.trade_date DESC LIMIT 1
   )) AS pure_bond_ytm,
   v.ifind_doublelow,
@@ -59,10 +60,11 @@ SELECT
   p.main_business  AS profile,
   p.industry,
   u.list_date
-FROM universe u
-JOIN valuation_daily v  ON u.code  = v.code  AND v.trade_date = ?
+FROM valuation_daily v
+LEFT JOIN universe u ON u.code = v.code AND v.trade_date = ?
 LEFT JOIN vol_daily vd  ON u.ucode = vd.ucode AND vd.trade_date = ?
 LEFT JOIN underlying_profile p ON u.ucode = p.ucode
+WHERE v.trade_date = ?
 ORDER BY u.code
 """
 
@@ -74,11 +76,27 @@ def main():
     args = ap.parse_args()
 
     con = connect()
-    rows = con.execute(QUERY, [args.trade_date, args.trade_date, args.trade_date]).fetchall()
+    rows = con.execute(QUERY, [args.trade_date, args.trade_date, args.trade_date, args.trade_date]).fetchall()
     cols = [d[0] for d in con.description]
+    vol_rows = {u:(v,n) for u,v,n in con.execute('SELECT ucode,vol_20d_pct,n_samples FROM vol_daily WHERE trade_date=?',[args.trade_date]).fetchall()}
+    profiles = {u:(text,industry) for u,text,industry in con.execute('SELECT ucode,main_business,industry FROM underlying_profile').fetchall()}
     con.close()
 
     items = [dict(zip(cols, row)) for row in rows]
+    metadata = snapshot_metadata(args.trade_date)
+    audit_path = os.path.join(os.path.dirname(args.out), 'quote_audit.json')
+    details = json.load(open(audit_path)).get('quote_details', {}) if os.path.exists(audit_path) else {}
+    for it in items:
+        bond = metadata.get(it['code'])
+        if bond is None:
+            continue
+        it.update({k:bond.get(k) for k in ('name','ucode','uname')})
+        it['list_date'] = str(bond.get('listed') or bond.get('list_date') or '').replace('-','').replace('/','')
+        it['vol_20d'], it['vol_n'] = vol_rows.get(it['ucode'], (None,None))
+        it['profile'], it['industry'] = profiles.get(it['ucode'], (None,None))
+        it['quote_date'] = details.get(it['code'], {}).get('quote_date')
+        it['quote_volume'] = details.get(it['code'], {}).get('volume')
+    items = [it for it in items if it['code'] in metadata]
     # Filter out privately placed CBs that are not part of the public tradable pool.
     before = len(items)
     items = [it for it in items if not _PRIVATE_CB_RE.search(it.get("name") or "")]
@@ -100,12 +118,17 @@ def main():
     if future_listed:
         print(f"[filter] excluded {future_listed} not-yet-listed bonds (list_date > trade_date)")
 
-    # Filter out force-redeemed bonds (redemp_stop_date <= trade_date means already stopped trading)
-    before = len(items)
-    items = [it for it in items if not (it.get("redemp_stop_date") and it["redemp_stop_date"] <= trade_ymd)]
-    filtered = before - len(items)
-    if filtered:
-        print(f"[filter] excluded {filtered} force-redeemed bonds")
+    metadata = snapshot_metadata(args.trade_date)
+    for it in items:
+        bond = metadata.get(it['code'], {})
+        it['redemp_stop_date'] = bond.get('redemp_stop_date')
+        for key in ('conversion_end_date', 'last_trade_date', 'stop_trading_date', 'delisting_date',
+                    'redemption_date', 'redemption_payment_date', 'redemption_price', 'lifecycle_source', 'lifecycle_known_on'):
+            if bond.get(key):
+                it[key] = bond[key]
+        if not it.get('conversion_end_date'):
+            it['conversion_end_date'] = bond.get('maturity')
+    items, lifecycle_exclusions = filter_snapshot(items, args.trade_date)
 
     # Sanity guard: pure_bond_value should never exceed 1.3× maturity redemption price.
     # iFinD occasionally returns inflated pbv for irregular bonds (e.g. 星球转债 2026-05-27
@@ -125,7 +148,7 @@ def main():
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(
-        {"trade_date": args.trade_date, "count": len(items), "items": items},
+        {"trade_date": args.trade_date, "execution_date": next_session(args.trade_date), "tradability_policy": 3, "count": len(items), "items": items, "tradability_exclusions": lifecycle_exclusions},
         open(args.out, "w", encoding="utf-8"), ensure_ascii=False, indent=2
     )
     print(f"[done] {len(items)} records (trade_date={args.trade_date}) → {args.out}")

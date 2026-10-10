@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "code": "128134.SZ",
+      "announced_on": "2026-09-28",
+      "last_trade_date": "2026-09-28",
+      "stop_trading_date": "2026-09-29",
+      "conversion_end_date": "2026-10-08",
+      "redemption_date": "2026-10-09",
+      "delisting_date": "2026-10-09",
+      "redemption_price": 110.0,
+      "lifecycle_source": "https://epaper.cs.com.cn/zgzqb/html/2026-09/28/nw.D110000zgzqb_20260928_1-B014.htm",
+      "redemption_payment_date": "2026-10-09"
+    },
+    {
+      "code": "127067.SZ",
+      "announced_on": "2026-08-20",
+      "last_trade_date": "2026-09-03",
+      "stop_trading_date": "2026-09-04",
+      "conversion_end_date": "2026-09-08",
+      "redemption_date": "2026-09-09",
+      "redemption_payment_date": "2026-09-16",
+      "redemption_price": 100.25,
+      "lifecycle_source": "https://disc.static.szse.cn/download/disc/disk03/finalpage/2026-08-20/09d95607-e1e5-43a9-836e-a87ada59df54.PDF"
+    }
+  ]
+}

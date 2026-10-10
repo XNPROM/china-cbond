@@ -12,7 +12,8 @@ from daily_refresh import _latest_universe_snapshot
 @pytest.mark.parametrize('policy,checked,expected', [
     (1, '2026-07-13', False),
     (2, '2026-07-12', False),
-    (2, '2026-07-13', True),
+    (2, '2026-07-13', False),
+    (3, '2026-07-13', True),
 ])
 def test_reuse_requires_listing_and_stop_date_policy(tmp_path, policy, checked, expected):
     from daily_refresh import _tradability_verified
@@ -54,3 +55,20 @@ def test_latest_snapshot_requires_both_files(tmp_path):
         assert "--refresh-universe" in str(exc)
     else:
         raise AssertionError("expected missing complete snapshot error")
+
+
+@pytest.mark.parametrize("rc,produced", [(1, False), (0, False), (1, True), (0, True)])
+def test_optional_backtest_never_reuses_old_or_failed_curve(tmp_path, monkeypatch, rc, produced):
+    import daily_refresh
+    artifact=tmp_path/"backtest.json";artifact.write_text("old")
+    overview=tmp_path/"overview.md";overview.write_text("report")
+    def run(*args, **kwargs):
+        assert not artifact.exists()
+        assert kwargs["required"] is False
+        if produced:artifact.write_text("new")
+        return rc
+    monkeypatch.setattr(daily_refresh, "_run_step", run)
+    result=daily_refresh._optional_backtest("2026-09-28", ["fixture"], str(tmp_path), str(artifact), str(overview))
+    assert result is (rc==0 and produced)
+    assert artifact.exists() is result
+    assert ("省略收益曲线" in overview.read_text()) is (not result)

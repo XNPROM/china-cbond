@@ -165,3 +165,15 @@ class ReportViewModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_non_executable_bond_is_not_dashboard_highlight():
+    from report_view_model import normalize_card, build_highlights
+    blocked=normalize_card({'bond_code':'128134.SZ','bond_name':'鸿路转债','price':'110',
+                            'relative_value':'0.1','delta':'1','vol':'100',
+                            'execution_eligibility':'临期日期待核验'},'建筑',0)
+    active=normalize_card({'bond_code':'110075.SH','bond_name':'正常转债','price':'110',
+                           'relative_value':'0.9','delta':'0.5','vol':'30',
+                           'execution_eligibility':'可参与筛选'},'制造',1)
+    assert blocked['recommendation_eligible'] is False
+    assert all(x['bond_code']=='110075.SH' for x in build_highlights([blocked,active]))

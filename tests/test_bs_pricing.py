@@ -132,10 +132,10 @@ class BSCallTests(unittest.TestCase):
 
         call, delta, gamma, theta, vega = bs_call(S, K, sigma, r, T)
 
-        self.assertEqual(call, 20.0)  # S - K
-        self.assertEqual(delta, 0.0)
+        self.assertAlmostEqual(call, S-K*math.exp(-r*T), places=10)
+        self.assertEqual(delta, 1.0)
         self.assertEqual(gamma, 0.0)
-        self.assertEqual(theta, 0.0)
+        self.assertAlmostEqual(theta, -r*K*math.exp(-r*T)/365, places=10)
         self.assertEqual(vega, 0.0)
 
     def test_zero_time_to_maturity(self):
@@ -151,28 +151,14 @@ class BSCallTests(unittest.TestCase):
         self.assertEqual(call, 20.0)
 
     def test_very_short_maturity(self):
-        """When T is very small (< 0.01), should use intrinsic."""
-        S = 120.0
-        K = 100.0
-        sigma = 0.30
-        r = 0.025
-        T = 0.005
-
-        call, delta, gamma, theta, vega = bs_call(S, K, sigma, r, T)
-
-        self.assertEqual(call, 20.0)
+        call, delta, gamma, theta, vega = bs_call(110, 110, .35, .025, 1/365)
+        self.assertAlmostEqual(call, .8076751827550481, places=10)
+        self.assertGreater(gamma, 0)
+        self.assertGreater(vega, 0)
 
     def test_negative_time(self):
-        """Negative time should use intrinsic value."""
-        S = 120.0
-        K = 100.0
-        sigma = 0.30
-        r = 0.025
-        T = -1.0
-
-        call, delta, gamma, theta, vega = bs_call(S, K, sigma, r, T)
-
-        self.assertEqual(call, 20.0)
+        with self.assertRaises(ValueError):
+            bs_call(120, 100, .3, .025, -1)
 
     def test_zero_stock_price(self):
         """S = 0 should return 0 call value."""
@@ -187,17 +173,8 @@ class BSCallTests(unittest.TestCase):
         self.assertEqual(call, 0.0)
 
     def test_zero_strike(self):
-        """K = 0 should use fallback and handle gracefully."""
-        S = 100.0
-        K = 0.0
-        sigma = 0.30
-        r = 0.025
-        T = 2.0
-
-        call, delta, gamma, theta, vega = bs_call(S, K, sigma, r, T)
-
-        # Should return intrinsic when K = 0
-        self.assertEqual(call, 100.0)
+        with self.assertRaises(ValueError):
+            bs_call(100, 0, .3, .025, 2)
 
     def test_vega_per_1pct(self):
         """Vega should be scaled per 1% vol change."""

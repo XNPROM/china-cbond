@@ -35,11 +35,6 @@ cbond_overview_*.html
 reports/*/cbond_strategy.html
 reports/*/cbond_strategy.md
 reports/index.html
-# Old pre-LLM-theme reports — superseded
-reports/2026-04-20/
-reports/2026-04-22/
-reports/2026-04-23/
-reports/2026-04-24/
 
 # Deprecated remote deploy directory
 docs/

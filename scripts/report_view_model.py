@@ -114,6 +114,8 @@ def normalize_card(card, theme, idx):
         "themes": deduped_themes,
         "business": card.get("business", ""),
         "strategy": card.get("strategy", ""),
+        "execution_eligibility": card.get("execution_eligibility", ""),
+        "recommendation_eligible": card.get("execution_eligibility", "") in ("", "可参与筛选"),
         "sector": sector,
         "search_text": search_text,
         "price": {"text": card.get("price", ""), "value": price_value},
@@ -177,7 +179,7 @@ def build_highlights(items):
         ("最低相对价值", "relative_value", False), ("低溢价关注", "conv", False),
         ("高弹性关注", "delta", True), ("高波动关注", "vol", True),
     ):
-        eligible = [item for item in items if item[metric]["value"] is not None]
+        eligible = [item for item in items if item[metric]["value"] is not None and item.get("recommendation_eligible", True)]
         if not eligible:
             continue
         item = sorted(eligible, key=lambda item: item[metric]["value"], reverse=descending)[0]
