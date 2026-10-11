@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{ title | e }}</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>{{ css | safe }}</style>
 </head>
 <body>
@@ -70,11 +69,11 @@
             <div class="chart-head">
               <div>
                 <h3>价格 × 转股溢价散点</h3>
-                <p>气泡大小代表余额，颜色代表相对价值状态。点击标的可直接打开详情。</p>
+                <p>颜色代表相对价值状态。点击标的可直接打开详情。</p>
               </div>
               <div class="legend-row">
                 <span class="legend-dot legend-good"></span><span>低估</span>
-                <span class="legend-dot legend-neutral"></span><span>合理</span>
+                <span class="legend-dot legend-neutral"></span><span>合理 / 未估值</span>
                 <span class="legend-dot legend-risk"></span><span>偏贵</span>
               </div>
             </div>

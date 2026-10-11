@@ -21,7 +21,7 @@
   const $ = selector => document.querySelector(selector);
   const $$ = selector => Array.from(document.querySelectorAll(selector));
 
-  let radarChart = null;
+  let radarKeyboardBound = false;
 
   const BACKTEST_SERIES = [
     { key: "cum_dl", label: "双低 Top10", color: "#1d4ed8", width: 3 },
@@ -481,118 +481,64 @@
     if (scrim) scrim.hidden = true;
   }
 
+  function radarAxis(values) {
+    const minimum = Math.min(0, ...values);
+    const maximum = Math.max(0, ...values);
+    const raw = (maximum - minimum || 1) / 5;
+    const magnitude = 10 ** Math.floor(Math.log10(raw));
+    const step = ([1, 2, 5, 10].find(value => value * magnitude >= raw) || 10) * magnitude;
+    const low = Math.floor(minimum / step) * step;
+    const high = Math.max(low + step, Math.ceil(maximum / step) * step);
+    const ticks = [];
+    for (let value = low; value <= high + step / 2; value += step) ticks.push(value);
+    return { low, high, ticks, decimals: Math.max(0, -Math.floor(Math.log10(step))) };
+  }
+
   function renderRadar(items) {
     const el = $("#marketRadarChart");
     if (!el) return;
-    if (typeof echarts === "undefined") {
-      el.innerHTML = '<div class="empty-state"><h3>图表加载失败</h3><p>当前环境无法加载 ECharts。</p></div>';
+    const points = items.filter(item => toNumber(item.price) !== null && toNumber(item.conv) !== null);
+    if (!points.length) {
+      el.innerHTML = '<div class="empty-state"><h3>暂无可绘制的行情</h3></div>';
       return;
     }
-    if (!radarChart) {
-      radarChart = echarts.init(el, null, { renderer: "canvas" });
-      radarChart.on("click", params => {
-        if (params.data && params.data.bondCode) openDetail(params.data.bondCode);
+    const width = Math.max(240, el.clientWidth || 800), height = el.clientHeight || 380;
+    const margin = { left: 60, right: 24, top: 36, bottom: 48 };
+    const xAxis = radarAxis(points.map(item => toNumber(item.conv)));
+    const yAxis = radarAxis(points.map(item => toNumber(item.price)));
+    const xAt = value => margin.left + (value - xAxis.low) / (xAxis.high - xAxis.low) * (width - margin.left - margin.right);
+    const yAt = value => height - margin.bottom - (value - yAxis.low) / (yAxis.high - yAxis.low) * (height - margin.top - margin.bottom);
+    const colors = { undervalued: "#1d7a46", fair: "#4b5563", expensive: "#c2410c", na: "#4b5563" };
+    const lowest = points.filter(item => toNumber(item.relative_value) > 0)
+      .sort((a, b) => toNumber(a.relative_value) - toNumber(b.relative_value))[0];
+    const gridX = xAxis.ticks.map(value => `
+      <line class="radar-grid" x1="${xAt(value).toFixed(2)}" y1="${margin.top}" x2="${xAt(value).toFixed(2)}" y2="${height - margin.bottom}" />
+      <text class="radar-axis-label" x="${xAt(value).toFixed(2)}" y="${height - margin.bottom + 22}" text-anchor="middle">${value.toFixed(xAxis.decimals)}</text>`).join("");
+    const gridY = yAxis.ticks.map(value => `
+      <line class="radar-grid" x1="${margin.left}" y1="${yAt(value).toFixed(2)}" x2="${width - margin.right}" y2="${yAt(value).toFixed(2)}" />
+      <text class="radar-axis-label" x="${margin.left - 10}" y="${(yAt(value) + 4).toFixed(2)}" text-anchor="end">${value.toFixed(yAxis.decimals)}</text>`).join("");
+    const dots = points.map(item => {
+      const label = `${item.bond_name} · 价格 ${metricText(item.price)} · 转股溢价 ${metricText(item.conv)} · RV ${metricText(item.relative_value)} · Delta ${metricText(item.delta)}`;
+      const color = colors[item.relative_value.state] || colors.na;
+      return `<circle class="radar-point" cx="${xAt(toNumber(item.conv)).toFixed(2)}" cy="${yAt(toNumber(item.price)).toFixed(2)}" r="5" fill="${color}" data-open-code="${escapeHtml(item.bond_code)}" tabindex="0" role="button" aria-label="${escapeHtml(label)}"><title>${escapeHtml(label)}</title></circle>`;
+    }).join("");
+    const annotation = lowest ? `<text class="radar-annotation" x="${Math.max(margin.left + 55, Math.min(width - margin.right - 55, xAt(toNumber(lowest.conv)))).toFixed(2)}" y="${Math.max(margin.top + 12, yAt(toNumber(lowest.price)) - 14).toFixed(2)}" text-anchor="middle">${escapeHtml(lowest.bond_name)}</text>` : "";
+    el.innerHTML = `<svg class="radar-svg" viewBox="0 0 ${width} ${height}" role="group" aria-label="价格与转股溢价散点图，点击标的查看详情">
+      ${gridX}${gridY}
+      <text class="radar-axis-label" x="${margin.left}" y="18">价格（元）</text>
+      <text class="radar-axis-label" x="${width - margin.right}" y="${height - 8}" text-anchor="end">转股溢价率（%）</text>
+      ${dots}${annotation}
+    </svg>`;
+    if (!radarKeyboardBound) {
+      el.addEventListener("keydown", event => {
+        const point = event.target.closest(".radar-point");
+        if (point && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          openDetail(point.dataset.openCode);
+        }
       });
-      window.addEventListener("resize", () => radarChart && radarChart.resize());
+      radarKeyboardBound = true;
     }
-
-    const groups = {
-      undervalued: [],
-      fair: [],
-      expensive: [],
-    };
-    items.forEach(item => {
-      const bucket = item.relative_value.state === "undervalued"
-        ? "undervalued"
-        : item.relative_value.state === "expensive"
-          ? "expensive"
-          : "fair";
-      groups[bucket].push({
-        value: [
-          toNumber(item.conv) || 0,
-          toNumber(item.price) || 0,
-          toNumber(item.relative_value) || 0,
-        ],
-        bondCode: item.bond_code,
-        bondName: item.bond_name,
-        themeGroup: item.theme_group,
-        sector: item.sector,
-        priceText: metricText(item.price),
-        convText: metricText(item.conv),
-        rvText: metricText(item.relative_value),
-        deltaText: metricText(item.delta),
-      });
-    });
-
-    // Find lowest-RV bond for annotation
-    const allScatter = [...groups.undervalued, ...groups.fair, ...groups.expensive];
-    const lowestRv = allScatter.filter(d => d.value[2] > 0).sort((a, b) => a.value[2] - b.value[2])[0];
-    const markPointData = lowestRv ? [{
-      coord: [lowestRv.value[0], lowestRv.value[1]],
-      symbol: "pin",
-      symbolSize: 40,
-      itemStyle: { color: "#1d7a46" },
-      label: { show: true, formatter: lowestRv.bondName, color: "#1d7a46", fontSize: 11, position: "top", distance: 8 },
-    }] : [];
-
-    radarChart.setOption({
-      animationDuration: 300,
-      grid: { left: 52, right: 22, top: 36, bottom: 42 },
-      tooltip: {
-        trigger: "item",
-        backgroundColor: "rgba(255,255,255,0.96)",
-        borderColor: "rgba(139,124,94,0.18)",
-        borderWidth: 1,
-        textStyle: { color: "#1f2937" },
-        formatter: params => {
-          const data = params.data;
-          return [
-            `<strong>${escapeHtml(data.bondName)}</strong>`,
-            `${escapeHtml(data.themeGroup)}${data.sector ? " · " + escapeHtml(data.sector) : ""}`,
-            `价格 ${escapeHtml(data.priceText)} / 转股溢价 ${escapeHtml(data.convText)}`,
-            `RV ${escapeHtml(data.rvText)} / Delta ${escapeHtml(data.deltaText)}`,
-          ].join("<br>");
-        },
-      },
-      xAxis: {
-        type: "value",
-        name: "转股溢价率(%)",
-        nameTextStyle: { color: "#536072" },
-        axisLabel: { color: "#536072" },
-        splitLine: { lineStyle: { color: "rgba(139,124,94,0.14)" } },
-      },
-      yAxis: {
-        type: "value",
-        name: "价格",
-        nameTextStyle: { color: "#536072" },
-        axisLabel: { color: "#536072" },
-        splitLine: { lineStyle: { color: "rgba(139,124,94,0.14)" } },
-      },
-      series: [
-        {
-          name: "低估",
-          type: "scatter",
-          data: groups.undervalued,
-          symbolSize: 10,
-          itemStyle: { color: "#1d7a46", opacity: 0.86 },
-          markPoint: { data: markPointData, animation: false },
-        },
-        {
-          name: "合理",
-          type: "scatter",
-          data: groups.fair,
-          symbolSize: 10,
-          itemStyle: { color: "#4b5563", opacity: 0.74 },
-        },
-        {
-          name: "偏贵",
-          type: "scatter",
-          data: groups.expensive,
-          symbolSize: 10,
-          itemStyle: { color: "#c2410c", opacity: 0.8 },
-        },
-      ],
-    });
   }
 
   function renderBacktest() {
@@ -936,5 +882,13 @@
     initScrollToTopButton();
     renderBacktest();
     render();
+    let resizeFrame;
+    window.addEventListener("resize", () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(() => {
+        const items = filteredItems();
+        renderRadar(items.length ? items : ITEMS);
+      });
+    });
   });
 })();

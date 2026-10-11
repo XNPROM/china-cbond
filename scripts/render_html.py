@@ -79,7 +79,7 @@ def main():
     html_out = template.render(
         title=args.title,
         view_model=view_model,
-        view_model_json=json.dumps(view_model, ensure_ascii=False).replace("<", "\\u003c"),
+        view_model_json=json.dumps(view_model, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c"),
         css=css,
         js=js,
     )
